@@ -22,6 +22,20 @@ Open **http://localhost:8080/** for the loft or **http://localhost:8080/luxor/**
 
 In Luxor, use **WASD** to walk, **Shift** to run, and click or drag to look. **1–5** select viewpoints. **P** toggles carved depth, **J** cavity shadows, **O** weathering, **U** sand and dust, and **R** light shafts. The on-screen controls list the other effects.
 
+## CLI, MCP and tutorial
+
+The project includes a JSON CLI and a stdio MCP server for agents. Both expose the same schemas, persistent background jobs, progress, cancellation and artifact manifests. Scene inspection, camera planning, screenshots, painting, repairs, material maps, validation and GLB export are available without browser clicking.
+
+```sh
+npm ci
+npx playwright install chromium
+node automation/cli.mjs doctor --json
+node automation/cli.mjs screenshot --scene luxor --wait --json
+node automation/cli.mjs job-start --input @examples/automation/free-luxor.json --wait --json
+```
+
+**[Follow the tutorial](docs/TUTORIAL.md)** for a free Luxor walkthrough, MCP client setup, custom geometry, and optional paid generation/resuming. The **[automation reference](docs/AUTOMATION.md)** documents every command and the machine-readable contracts. Paid operations require explicit `allowPaid:true`; the free example uses clay renders to exercise the GPU pipeline.
+
 ## What comes from Trompe, and what Potemkin adds
 
 The foundation is Patch's work: walkable-camera planning, clay and geometry-buffer renders, material-aware prompts, sequential view painting, seam compositing, quality-weighted UV projection, relighting, and GLB export. Potemkin is a derivative of that engine, not an independently invented replacement.
@@ -38,6 +52,7 @@ This comparison is against public upstream [`ba9ef76`](https://github.com/Patch-
 | Materials | Painted color with real-time scene lighting | Normal/roughness processing, AO baking, aligned height-derived normals and editable material presets add controllable surface response. |
 | References | Text descriptions and model inputs | Scene look files, reference photographs and tone normalization provide reusable, place-specific material guidance. |
 | Reliability | The documented baseline saves a run when it completes | Incremental per-view saves, resumable runs and browser recovery retain completed generation work. |
+| Automation | Browser API and individual scripts | Shared CLI/MCP schemas, persistent jobs, progress, cancellation, artifact resources and a free tutorial. |
 | Presentation | Authoring viewer and export | Capsule-based walking, standalone multi-scene website, streamed high-resolution textures and the Luxor relief/weathering/camera-effects viewer. |
 
 Some options trade quality for memory, cost, or complexity. Surface-directed camera planning is experimental and is not always better. More atlas pages cannot recover detail absent from the generated views. The earlier measured examples in [ENGINE.md](ENGINE.md) are historical experiments, not a fresh benchmark against today's upstream or current model pricing.

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "allowPaid": false,
+  "timeoutSeconds": 300,
+  "steps": [
+    { "op": "load", "path": "samples/luxor.glb", "options": { "atlasSize": 1024, "viewSize": 512, "lighting": "overcast" } },
+    { "op": "bounds" },
+    { "op": "plan", "options": { "maxViews": 4, "spacing": 8, "yaws": 4, "probeSize": 64, "grid": 128 } },
+    { "op": "quote" },
+    { "op": "selfTest", "views": 2 },
+    { "op": "export", "output": "luxor-clay-test.glb" }
+  ]
+}

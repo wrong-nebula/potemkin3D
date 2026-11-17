@@ -1,7 +1,8 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { LIGHTING, type Session } from './session';
-import { DEFAULT_PIPELINE, falPlanes, generateView, loadStyleImages, prepareView, promptText, siteFor, type PipelineEvent, type PipelineOptions } from './core/pipeline';
+import { DEFAULT_PIPELINE, falPlanes, generateView, loadStyleImages, prepareView, promptText, quote, siteFor, type PipelineEvent, type PipelineOptions } from './core/pipeline';
+import { MODELS } from './providers/models';
 import type { AoOptions } from './core/ao';
 import type { PbrOptions } from './core/pbr';
 import type { PlanOptions } from './core/planner';
@@ -43,6 +44,18 @@ export function makeApi(session: Session) {
   };
   return {
     session,
+    /** Stable binary export for CLI/MCP adapters; does not trigger a browser download. */
+    exportGlb: () => session.exportGlb(),
+    /** Local estimate from bundled model prices, not a live quote or a spending limit. */
+    quote(options: Partial<Parameters<typeof quote>[1]> = {}) {
+      if (!session.plan || !session.engine) throw new Error('Plan cameras first');
+      const opts = { firstModel: DEFAULT_PIPELINE.firstModel, fillModel: DEFAULT_PIPELINE.fillModel,
+        viewSize: session.engine.size, ...options };
+      if (!MODELS[opts.firstModel] || !MODELS[opts.fillModel]) throw new Error('Unknown image model');
+      return { ...quote(session.plan, opts), currency: 'USD', estimateOnly: true,
+        excludes: ['naming', 'reference-image surcharges', 'additional repair passes', 'PBR maps'],
+        source: 'bundled model prices; verify current provider prices before generation' };
+    },
     materialPresetOptions: MATERIAL_PRESETS,
     materialPresets: (assignments: MaterialAssignments) => session.setMaterialPresets(assignments),
     /** Import matching atlas maps without resizing them or inferring height from the painting. */

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "allowPaid": false,
+  "timeoutSeconds": 1800,
+  "steps": [
+    { "op": "loadRun", "id": "luxor-first-run" },
+    { "op": "topUp", "saveAs": "luxor-first-run", "options": {
+      "nameParts": false, "references": 0, "check": false, "checkPlanes": false,
+      "plan": { "maxViews": 2, "holes": 0, "cleanup": 0, "roofs": 0, "floors": 0 }
+    } },
+    { "op": "finish" },
+    { "op": "save", "id": "luxor-first-run" },
+    { "op": "export", "output": "luxor-resumed.glb" }
+  ]
+}

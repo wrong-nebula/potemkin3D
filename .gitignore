@@ -44,3 +44,6 @@ dist-potemkin/
 !/.env.example
 references/luxor/01_hypostyle_columns.jpg
 references/luxor/raw/01_hypostyle_columns.jpg
+
+# Persistent local CLI/MCP jobs
+.potemkin/

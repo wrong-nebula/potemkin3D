@@ -1146,7 +1146,7 @@ export class Session {
 
   private meta(r: RunRecord, partial = false) {
     return {
-      level: r.level, options: r.options, viewSize: this.engine!.size,
+      level: r.level, options: r.options, viewSize: this.engine!.size, atlasSize: this.engine!.atlas.pageSize,
       projection: { minCos: this.engine!.options.minCos, edgeGuard: this.engine!.options.edgeGuard, frameMargin: this.engine!.options.frameMargin }, lighting: this.engine!.clay.lighting, cost: r.cost, seconds: r.seconds,
       ...(partial ? { partial: true } : {}), ...(r.pbr ? { pbr: r.pbr } : {}),
       ...(this.level?.shapes ? { parts: [...this.level.labels] } : {}),
