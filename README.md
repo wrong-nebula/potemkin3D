@@ -1,143 +1,140 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/header-evening.png">
-  <img alt="patch. trompe. Texture a whole game level from a gray blockout." src="docs/readme/header-day.png" width="800">
-</picture>
+# Potemkin 3D
 
-<br><br>
+**AI-painted environments with view-aware texture atlases, surface relief, and real-time walkthroughs.**
 
-<img alt="A gray village blockout fills with texture as image models paint it, then steps back into a frame beside its label." src="docs/readme/trompe.gif" width="800">
+Potemkin 3D extends [Trompe by Patch](https://github.com/Patch-gg/trompe). Start with ordinary UV-mapped geometry, paint camera views with image models, project those images back onto the mesh, and explore the result under real-time lighting. Potemkin adds tools for texture density, geometry fidelity, material response, and close-up presentation, with a Luxor temple and a New York loft as included scenes.
 
-**@patch_gg** · village blockout + FLUX 3 Klein + Fibo 2 · 128 views on fal, $4.44, 26 minutes, one view at a time.
+![Luxor temple rendered in Potemkin 3D: carved sandstone pylons, seated statues, and sunlight through dust](docs/images/luxor.png)
 
-**Good for realistic buildings seen from a few metres or more:** third-person and top-down games, trailers, big backdrops, and a first look at a level. **Not for stylised looks:** it's a photo painter, so it adds grime and uneven colour. **Not for the ground at a first-person player's feet:** that blurs, because the whole level shares one texture.
+*A screenshot of the included Luxor WebGL viewer, with the controls hidden. The geometry is a procedural interpretation of Luxor Temple; the painted inscriptions and relief are generated imagery, not an archaeological reconstruction.*
 
-trompe plans cameras where a player can stand, has an image model paint what each one sees, projects every painting
-back onto the level and bakes one texture. It paints under overcast light, so the texture comes out as albedo and your
-engine lights it with real shadows. Planning, projection and baking run in your browser on your GPU; the image models
-run on [fal](https://fal.ai).
+## Try the included scenes
 
-[Try trompe on Patch](https://patch.gg/patch/trompe) · [Demo video, 42 s](video/trompe_demo_web.mp4) ·
-[Before and after](video/before_after.jpg) · [Baked shadows vs real light](video/shadows_before_after.jpg) ·
-[What the prompts fixed](video/prompt_fix.jpg)
+No API key or image generation is needed to view the baked scenes. With Python 3 installed:
 
-## Quick start
-
-```bash
-npm install
-npx playwright install chromium               # for the headless scripts below
-export FAL_KEY=your-fal-key                   # used by the dev server's fal proxy
-npm run dev                                   # http://localhost:5178
+```sh
+git clone https://github.com/wrong-nebula/potemkin3D.git
+cd potemkin3D
+python3 -m http.server 8080 --bind 127.0.0.1 --directory deploy/potemkin3d
 ```
 
-To use it:
-1. Pick a sample level (Village, Courtyard, Hall) or drop in your own `.glb`. It needs UVs and Y up.
-2. Describe the look you want, as materials ("weathered limestone and ochre plaster walls, terracotta roofs"). Don't name objects: anything named here, like a fountain or a market stall, gets painted onto walls.
-3. Press **Plan cameras**, then **Texture level**.
-4. Download the textured `.glb` or the texture.
-5. Build your game on it and [publish it on Patch](#publish-it-on-patch).
+Open **http://localhost:8080/** for the loft or **http://localhost:8080/luxor/** for the temple. Serve that directory as the website root so the shared scene menu works.
 
-If you leave the fal key field empty, the dev server adds `FAL_KEY` server-side and the browser never sees it. A key typed into the field is kept in that browser and sent straight to fal.
+In Luxor, use **WASD** to walk, **Shift** to run, and click or drag to look. **1–5** select viewpoints. **P** toggles carved depth, **J** cavity shadows, **O** weathering, **U** sand and dust, and **R** light shafts. The on-screen controls list the other effects.
 
-Headless, from the command line, the run is saved to `runs/<id>/`:
+## What comes from Trompe, and what Potemkin adds
 
-```bash
-node scripts/texture.mjs --level samples/village.glb --id village --views 90 --spacing 3.5 --aerial 8 --roofs 24 --holes 12 \
-  --atlas 8192 --style "a sunlit Mediterranean hill village: weathered limestone and ochre plaster walls, ..."
+The foundation is Patch's work: walkable-camera planning, clay and geometry-buffer renders, material-aware prompts, sequential view painting, seam compositing, quality-weighted UV projection, relighting, and GLB export. Potemkin is a derivative of that engine, not an independently invented replacement.
+
+This comparison is against public upstream [`ba9ef76`](https://github.com/Patch-gg/trompe/tree/ba9ef76687f57eef157057c7592d26e59c805992), checked on 2026-11-17. Potemkin retains upstream Git history; subsequent local development is published as a consolidated commit under `wrong-nebula`. The following are implementation differences, not a claim of universal quality or speed improvements.
+
+| Area | Public Trompe baseline | Potemkin additions and intended benefit |
+| --- | --- | --- |
+| Texture allocation | Uses the model's existing UV layout | Visibility-weighted and distance-weighted repacking; multi-page atlases and island splitting put more texels on surfaces players approach. |
+| Camera selection | Greedy coverage of reachable surfaces, roofs, aerial views and holes | Optional detail-gain scoring, surface-directed candidates and paintability estimates; measure useful pixels rather than coverage alone. |
+| Geometry fidelity | Prompts constrain the image model to the blockout | SAM-based face checks, a MoGe plane test, automatic shape naming and retry passes reduce paintings that replace a wall or prop with an invented scene. |
+| Repairs | Fill unpainted holes | Target low-detail defects, isolate difficult parts and small props, then fill remaining slivers from nearby same-part colors. |
+| Floors | Ground mainly painted through scene views | Dedicated overhead passes, world-space material tiling and an optional protected detail layer address grazing-angle blur and inconsistent scale. |
+| Materials | Painted color with real-time scene lighting | Normal/roughness processing, AO baking, aligned height-derived normals and editable material presets add controllable surface response. |
+| References | Text descriptions and model inputs | Scene look files, reference photographs and tone normalization provide reusable, place-specific material guidance. |
+| Reliability | The documented baseline saves a run when it completes | Incremental per-view saves, resumable runs and browser recovery retain completed generation work. |
+| Presentation | Authoring viewer and export | Capsule-based walking, standalone multi-scene website, streamed high-resolution textures and the Luxor relief/weathering/camera-effects viewer. |
+
+Some options trade quality for memory, cost, or complexity. Surface-directed camera planning is experimental and is not always better. More atlas pages cannot recover detail absent from the generated views. The earlier measured examples in [ENGINE.md](ENGINE.md) are historical experiments, not a fresh benchmark against today's upstream or current model pricing.
+
+## How the techniques fit together
+
+### 1. Plan from where the scene will be seen
+
+The engine samples walkable ground, places eye-height cameras, checks visibility, and selects overlapping views. Geometry buffers record surface position, normals, UVs and part identity. Additional cameras can cover roofs, ground and holes. The optional sharpness objective favors cameras that improve projected sampling density instead of simply covering more texels.
+
+### 2. Spend texture resolution on useful surfaces
+
+`layout.ts` repacks existing UV islands; it does not unwrap an arbitrary mesh. The `seen` layout reduces the allocation for hidden surfaces. The `near` layout also weights islands by player distance and joins compatible faces into strips. Multi-page packing divides a large scene among several atlases, cutting oversized islands when necessary while retaining a consistent scale across pages.
+
+### 3. Paint views, preserve structure, and project
+
+Image models receive a clay/state render, material instructions, part names and optional reference images. Earlier paint supplies context for later views. Compositing preserves known pixels and adjusts color drift at seams. Geometry checks reject or retry regions where the model replaces a surface. Projection favors views with better angle and distance, while cleanup and part-specific passes concentrate additional calls on remaining defects. A final local color fill covers otherwise unreachable slivers; it does not invent missing geometric detail.
+
+### 4. Separate painted color from surface response
+
+The pipeline aims for approximately unlit color by painting under overcast lighting. Normal, roughness and optional AO maps supply additional shading. Aligned-map processing derives normals from the same height field used for relief, with physical scale and slope limits controlled by material presets. Presets leave the painted atlas intact. See [material maps](docs/material-maps.md) for data conventions, persistence and limitations.
+
+### 5. Make Luxor's carving read at close range
+
+The Luxor viewer uses **parallax occlusion mapping (POM)**: the shader traces through a dedicated height texture to offset the apparent surface intersection. Color and material channels use the same displaced UVs. A second trace adds self-shadowing inside recesses. Island-boundary masks keep traces from sampling a neighboring packed surface; relief fades with distance and extreme grazing angles. This changes surface appearance, not mesh silhouettes, collision or cast-shadow geometry.
+
+Low-resolution geometry/textures load first, then high-resolution material pages stream in. Color, normals and height switch together. Procedural edge wear, stone weathering, sand, airborne dust and light shafts build on the same scene. Camera effects include exposure adaptation, bloom, lens artifacts, depth of field, motion blur and color grading. These are adjustable presentation effects, not evidence of recovered physical detail.
+
+The editable implementation is in [`experiments/luxor-view/`](experiments/luxor-view/), including [POM and height-map details](experiments/luxor-view/README.md).
+
+## Author a scene
+
+Use a current Node.js version supported by the pinned Vite dependencies, npm, and a browser with WebGL. GPU acceleration is recommended; the geometry checker can also use WebGPU.
+
+```sh
+npm ci
+npx playwright install chromium  # needed for headless scripts
+cp .env.example .env.local       # add your own FAL_KEY for generation
+npm run dev
 ```
 
-Add `--plan-only` to get a free quote first: it picks the cameras in about a second, calls no model and prints the number of views. Each view costs 1¢ to 4¢ and takes about 10 seconds. A run is saved only when it finishes, so a crash loses what it has paid for.
+Open the URL printed by Vite, normally **http://localhost:5178**. Choose a sample or a UV-mapped, Y-up GLB, describe its materials, plan cameras, and then texture it. Named material parts improve the prompts. The local fal proxy reads the key server-side. Generation uses paid external model APIs; the included scene viewer, local map processing and ordinary tests do not need those calls.
 
-On Windows the script runs through ANGLE's D3D11 backend (`TROMPE_ANGLE` picks another). `TROMPE_CHROME` points it at another Chromium or Chrome if Playwright's own isn't installed.
+A Luxor planning example:
 
-To try prompt or model changes cheaply before a full run, `scripts/prompt-test.mjs` repaints chosen views of a saved run, with the texture rebuilt up to just before each one. It can also paint roof passes on top of the finished run, and it saves every image to `runs/<run>-ab/<tag>/`. `--dry` writes the prompts and inputs without calling any model.
-
-To fill whatever a saved run still misses, `--resume <id>` plans views only where the texture is missing or poor and paints on top, in place. For example: `node scripts/texture.mjs --level samples/village.glb --resume village --views 30 --aerial 8 --atlas 8192`. `--parallel 6` paints non-overlapping views at the same time, which is faster but leaves visible seams where they meet.
-
-On WSL2, `scripts/browser.mjs` points headless Chromium's ANGLE at Mesa's D3D12 driver, so runs use the real GPU instead of SwiftShader.
-
-## Publish it on Patch
-
-Built a game on a level trompe painted? Publish it on [Patch](https://patch.gg), where people play and remix browser
-games and mods. Install `pch`, Patch's command line, then restart your coding agent and ask it to publish the game: the
-install gives every agent on your PC Patch's tools. Or run it yourself:
-
-```bash
-npm i -g @patchgg/cli      # or: curl -fsSL https://patch.gg/install.sh | sh
-pch login
-pch init                   # in your game's folder; it says what's next
-pch publish
+```sh
+node scripts/texture.mjs --look samples/luxor.look.json --id luxor-new \
+  --first h3 --fill h3 --views 64 --cleanup 8 --finish \
+  --layout near --pages 4 --atlas 4096 --plan-only
 ```
 
-Publishing needs [Patch Desktop](https://docs.patch.gg/get-started) open on a Windows PC: it plays the game once to
-test it before it goes live.
+Review the plan before removing `--plan-only` to start paid generation. The public look file uses only the reference photos included with known licenses. It therefore differs from the historical input set used for the bundled scene. See [ENGINE.md](ENGINE.md) for all CLI options and generation workflows.
 
-## How it works
+## Build and check
 
-| Step | Where | What |
-|---|---|---|
-| Plan | `src/core/planner.ts` | Sample walkable floors at eye height. Drop spots inside solids or out in the open (rooftops). Join spots a player can walk between (following the floor, so stairs count) and keep the play areas. Render cheap probes from 8 headings per spot, then pick cameras greedily until most reachable surface is captured well. Each camera is ordered to overlap what's already painted. Roofs get their own close, drone-style cameras (`--roofs`, 15 m out, 50° down, facing each slope), chosen the same way over roof surfaces only. Then `--aerial` cameras pick up what's left, with their own budget: a high ring looks down at the tops of props and the ground behind them, and a low ring outside the level faces the outer walls. Paint order: players' views, then roofs, then the rings. Last, a hole pass (`--holes`) looks for texels nothing has painted (ground hidden behind props from eye height, tops of props). It renders candidate cameras 5 m above where players stand, plus the high ring, and picks them by how many unpainted pixels each actually sees. Those views paint only the holes. |
-| See | `src/core/clay.ts`, `views.ts` | Lit gray render per camera (sky light, a soft key light, screen-space AO), plus per-pixel position, normal and UV buffers. The "state" image is the clay render with already-painted texture composited in. By default the clay is lit like an overcast day, with no cast shadows, and the prompts ask for soft overcast light. That's why photogrammetry is shot under cloud: the texture comes out close to albedo. `--lighting outdoor` paints under a sun and bakes its shadows in. It looks photographic from that one sun, but each view paints the shadows a little differently, and they can't be relit. |
-| Prompt | `src/core/semantics.ts`, `src/providers/models.ts` | Each view's prompt is built from the level's part names (glTF material names, else mesh names). It lists the parts in the area to paint with rough positions ("house walls (left), stone stairs (bottom)"). Flat details such as windows, doors and stonework are allowed, but nothing may stick out or be added (awnings, stalls, signs, lamps and so on) unless the level models it. The look is materials only. Roof views get a roof-tile prompt, a mask covering only the roofs, and project nothing else. |
-| Paint | `src/providers/` | The first view, and any view that's over 75% unpainted, goes to FLUX 3 Klein ($0.009). It keeps the geometry far better than Fibo on blank views. Everything else is a masked fill with Fibo 2 Edit ($0.04), and so is every roof view. Views with under 3% unpainted are skipped. Views run one at a time, so each sees everything painted before it. |
-| Paste | `src/core/composite.ts` | Known pixels are kept exactly. The new image's colours are shifted by how far the model drifted on the known pixels along the seam (a push-pull fill of that difference, fading over ~120 px), then it fades in over 10 px. Any part of the area the model hands back unchanged (still gray clay) is left out of the projection, so the gray never passes for paint and a later view or the hole pass gets another go at it. |
-| Project | `src/core/atlas.ts` | A UV-space pass writes colour into each texel this camera sees better than whatever is stored. Quality is cos(angle)/distance, and pixels within 6 px of a silhouette count at 0.3x, so a better view replaces them. Texels captured at under 0.4x a later view's quality get regenerated. A view can be limited to some of its pixels (transparent, premultiplied); roof passes use this. |
-| Light | `src/core/viewer.ts` | The **Lit** display mode uses the texture as albedo under a real sun with shadow maps and sky light, so shadows always match the geometry. The sun sliders move them live. The **Textured** mode shows the texture as painted. |
-| Bake | `src/core/export.ts` | The texture is the bake: gutters are padded, then it's exported as glTF. An overcast (albedo) texture goes on a lit material for the engine to light; a sun-painted one goes on an unlit material. |
-
-The demo level (`samples/build_village.py`) names its parts through glTF materials ("house walls", "tiled roof", "stone stairs", "wooden barrels", ...), which is what the prompts read. It also unwraps by importance: surfaces players walk past get 62% of the texture, roofs 14% and outer walls 6%. Levels without part names still work: roofs are found by slope and height, and prompts go without a parts list.
-
-The AI sky backdrop averages sky pixels only from views whose model painted the whole frame (Klein). Masked fills leave the clay sky as it was.
-
-## The demo
-
-The village in the video is run `village-07`: 128 views, $4.44 and 26 minutes on fal, painted one view at a time under
-overcast light. 88 views come from where players stand, 20 from over the roofs, 11 from around the outside and 9 fill
-holes. It's shown lit by a real sun, which swings round in the last shot.
-
-`src/demo.ts` and `scripts/capture.mjs` replay a saved run wave by wave and render the frames straight off the WebGL
-canvas. `video/compose.py` lays them out in Patch's video style (`video/lightsdown.py`): the clip in a plain frame with
-the pink patch on its corner, one caption line under it, the label beside it. `video/audio.py` mixes the score and UI
-sounds, and `video/encode.sh` muxes the result. `docs/readme/make_art.py` draws this README's header and footer.
-
-The layout uses Patch's brand kit, which isn't in this repo: Patch Pixel is Patch's own typeface. Put the kit at
-`./brand-kit` (or point `PATCH_BRAND_KIT` at it) to rebuild the video or the README art.
-
-## Tests
-
-```bash
-npm test          # unit tests for compositing and planner helpers
-npm run build     # type check + production build
+```sh
+npm test
+npm run build          # type-check and build the authoring application into dist/
+npm run build:scenes   # rebuild both viewers using the included baked assets into dist-potemkin/
+python3 -m http.server 8080 --bind 127.0.0.1 --directory dist-potemkin
 ```
 
-## Known limits (next up)
+The scene build uses existing GLBs and textures and makes no model calls. It keeps the source assets in `deploy/potemkin3d/`. Editing Luxor's viewer code is independent of regenerating its painted textures.
 
-- **Resolution.** Views are 1024 px. Klein can paint 2048 px views for $0.014 and shows visibly more detail; Fibo works at about 1 megapixel either way. `--view-size 2048` works, but a full run then keeps about 8 GB of per-view images in the tab. Views need to stream to disk as they finish first.
-- **Some outer walls stay gray.** Walls facing narrow gaps between buildings aren't seen well by any camera yet.
-- **Misprojections.** Overhangs (like the arcade ceiling) can catch misprojected fragments, and gables sometimes get a patch of painted sky. Next is an automatic retouch pass: find seams and odd patches, then send masked fills over them.
-- **Floor clutter from down-looking views.** Floor views make the models paint crates and debris onto the ground, so they're off (`downYaws: 0`). Floor views need their own prompt, or the normals check from the spike.
-- **No local models yet.** fal only so far; a ComfyUI provider is next.
-- **Albedo is approximate.** Overcast painting removes cast shadows, but the models still paint some soft shading and contact darkening. Dividing out the known clay shading, or a Marigold-style intrinsic decomposition, would get closer. Normal and roughness maps are planned too.
-- **No UV unwrapping.** Levels must come with UVs; importance weighting only exists in the demo level's builder.
+Height-processing tests additionally require NumPy and Pillow:
 
-## License
+```sh
+python3 -m unittest discover -s test -p 'height_maps_test.py'
+```
 
-Apache-2.0, see [LICENSE](LICENSE). The Patch name, mark, wordmark and Patch Pixel belong to Patch and aren't covered
-by it. Funnel Sans and Red Hat Mono in `video/fonts/` are under the SIL Open Font License 1.1
-([OFL-FunnelSans.txt](video/fonts/OFL-FunnelSans.txt), [OFL-RedHatMono.txt](video/fonts/OFL-RedHatMono.txt)).
+## Project map
 
-The demo video's music isn't in the repo. To rebuild the video with a score, put a track at `video/audio/music.mp3`
-and its downbeats in `video/audio/beats.json`; without one, `video/audio.py` mixes the UI sounds alone.
+| Location | Contents |
+| --- | --- |
+| `src/core/` | Planning, geometry checks, atlas layout/projection, repairs, materials and export |
+| `src/providers/` | fal model integrations and the browser segmentation model |
+| `src/ui/`, `src/session.ts`, `src/api.ts` | Authoring interface, state and automation API |
+| `src/demo/loftwalk.js` | Loft walkthrough and shared camera-effect shaders |
+| `experiments/luxor-view/` | Editable temple viewer, POM, texture LOD, weathering and height processing |
+| `experiments/material-lab/`, `experiments/benchmark/` | Material experiments and comparison tooling |
+| `samples/`, `references/` | Procedural geometry, look files and attributed photo references |
+| `deploy/potemkin3d/` | Complete baked loft/Luxor site and its shared menu |
+| `scripts/`, `test/` | Automation, measurement, building and tests |
 
-## Credits
+## Limitations and provenance
 
-Made by [Patch](https://patch.gg) ([@patch_gg](https://x.com/patch_gg)). Image models run on [fal](https://fal.ai):
-FLUX 3 Klein by Black Forest Labs for first views, Fibo 2 Edit by Bria for fills and roofs (others are wired up in
-`src/providers/models.ts`). Built on [three.js](https://threejs.org),
-[three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh), Vite and Playwright.
+- Geometry still needs usable UVs. Repacking improves allocation; it is not general-purpose UV unwrapping.
+- Generated textures can contain hallucinated inscriptions, inconsistent details, residual lighting and seams. A fidelity check reduces mistakes without guaranteeing accuracy.
+- Atlas size, page count, POM and post-processing all consume GPU resources. Performance depends on resolution, hardware and enabled effects.
+- Some runtime detail layers are shader effects and are not baked into a plain GLB export.
+- The original full generation runs are not included. Finished assets are available, but exact texture regeneration is not reproducible from this repository alone. The viewer source was recovered from retained local Git trees; [PROVENANCE.md](PROVENANCE.md) records the source hashes.
+- Experimental tools may require separately generated runs or additional Python dependencies. The README quick-start uses the self-contained baked scenes.
 
-<br>
+## License and credits
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/footer-evening.png">
-  <img alt="patch.gg. Mashups, mods and browser games." src="docs/readme/footer-day.png" width="500">
-</picture>
+The code is **Apache-2.0**, retaining [Trompe's license](https://github.com/Patch-gg/trompe/blob/ba9ef76687f57eef157057c7592d26e59c805992/LICENSE). See [LICENSE](LICENSE), [NOTICE](NOTICE), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Modified upstream source files identify the Potemkin changes. Patch's trademarks and branding remain Patch's; this project is not an official Patch release.
+
+Trompe was made by [Patch](https://patch.gg). Potemkin's additions are maintained here by [wrong-nebula](https://github.com/wrong-nebula). The engine uses Three.js, three-mesh-bvh, Vite, Playwright, Transformers.js and model services through fal. Individual models and services retain their own terms.
+
+Photographs and fonts have separate licenses and attribution. The Luxor reference credits identify the included CC BY-SA photos, cropping and tone adjustments. A photo whose source/license was unknown and the hangar's film-reference images are excluded. Scene media and screenshot licensing are described in [ASSET_LICENSES.md](ASSET_LICENSES.md); the code license does not relicense third-party material.

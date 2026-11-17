@@ -1,3 +1,4 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { byteTarget, floatTarget, passMaterial, type Gpu } from './gpu';
 import type { Level } from './scene';
@@ -21,6 +22,11 @@ export interface Lighting {
    * paint near-albedo textures, and shadows come from real lighting at display time instead of being baked in.
    */
   overcast?: boolean;
+  /**
+   * The sun is out but does not shine into view: it lights what is outside and the room takes its light from the sky
+   * and from bounce, so the render has no sunbeams and no sunlit patches for the models to paint into the texture.
+   */
+  indirect?: boolean;
 }
 
 export const OUTDOOR: Lighting = { name: 'outdoor', sunAzimuth: 45, sunElevation: 50, sunIntensity: 2.7, skyIntensity: 2.1, bounce: 0.35,
@@ -29,6 +35,10 @@ export const OVERCAST: Lighting = { name: 'overcast', sunAzimuth: 45, sunElevati
   exposure: 1.0, sky: [0.62, 0.68, 0.78], overcast: true };
 export const INDOOR: Lighting = { name: 'indoor', sunAzimuth: 200, sunElevation: 35, sunIntensity: 4.5, skyIntensity: 1.6, bounce: 0.45,
   exposure: 1.2, sky: [0.5, 0.6, 0.75] };
+
+/** A sunny day seen from a room the sun does not reach into: the sun nearly overhead, the room lit by sky and bounce. */
+export const INDOOR_SOFT: Lighting = { name: 'indoor-soft', sunAzimuth: 200, sunElevation: 84, sunIntensity: 4.0, skyIntensity: 2.3, bounce: 0.3,
+  exposure: 1.25, sky: [0.5, 0.6, 0.75], indirect: true };
 
 export function sunDirection(l: Lighting): THREE.Vector3 {
   const az = THREE.MathUtils.degToRad(l.sunAzimuth);
@@ -210,7 +220,40 @@ export class ClayRenderer {
     this.gpu.pass(this.output, out);
   }
 
+  /**
+   * Tint one part pink in the clay renders (to ask a vision model what it is), or go back to plain clay with null.
+   * The tint is a vertex colour that exists only while a part is highlighted, so exports never carry it.
+   */
+  setHighlight(part: number | null) {
+    const g = this.level.geometry;
+    if (part === null) {
+      if (!g.getAttribute('color')) return;
+      g.deleteAttribute('color');
+      this.material.vertexColors = false;
+      this.material.needsUpdate = true;
+      return;
+    }
+    const label = g.getAttribute('label');
+    let color = g.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!color) {
+      color = new THREE.Float32BufferAttribute(new Float32Array(label.count * 3), 3);
+      g.setAttribute('color', color);
+      this.material.vertexColors = true;
+      this.material.needsUpdate = true;
+    }
+    for (let v = 0; v < label.count; v++) {
+      const on = Math.round(label.getX(v)) === part;
+      color.setXYZ(v, 1, on ? 0.1 : 1, on ? 0.55 : 1);
+    }
+    color.needsUpdate = true;
+  }
+
   makeTarget(size: number) {
     return byteTarget(size, size, { linear: false });
+  }
+
+  dispose() {
+    this.material.dispose(); this.output.dispose(); this.aoMat.dispose(); this.blurMat.dispose();
+    this.hdr.dispose(); this.aoRaw.dispose(); this.aoBlur.dispose(); this.sun.shadow.dispose();
   }
 }

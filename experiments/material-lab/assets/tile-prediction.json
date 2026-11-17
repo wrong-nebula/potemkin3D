@@ -1,0 +1,11 @@
+{
+  "model": "fal-ai/patina",
+  "seed": 1701,
+  "requestId": "01a1d09d-759f-7961-b6ef-cac50703f51d",
+  "elapsedSeconds": 30.245093125,
+  "outputs": [
+    "tile-basecolor.png",
+    "tile-height.png",
+    "tile-roughness.png"
+  ]
+}

@@ -1,14 +1,10 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { OUTDOOR } from './core/clay';
-import { floatTarget, passMaterial } from './core/gpu';
 import { makeCamera } from './core/views';
 import type { ViewRecord } from './core/pipeline';
 import type { Session } from './session';
 
-const COPY = /* glsl */ `
-uniform sampler2D src;
-layout(location = 0) out vec4 outColor;
-void main() { outColor = texelFetch(src, ivec2(gl_FragCoord.xy), 0); }`;
 
 export interface FrameSpec {
   camera: { position: [number, number, number]; target: [number, number, number]; fov: number };
@@ -39,8 +35,7 @@ export class Demo {
   private revealing = -1;           // first wave of the group currently being revealed
   private revealEnd = -1;
   private skyReady = false;
-  private before?: THREE.WebGLRenderTarget;
-  private readonly copy = passMaterial(COPY, { src: { value: null } });
+  private before?: THREE.WebGLArrayRenderTarget;
 
   constructor(private readonly session: Session) {}
 
@@ -56,9 +51,8 @@ export class Demo {
     s.engine!.atlas.reset();
     this.applied = 0;
     this.revealing = -1;
-    const size = s.engine!.atlas.size;
     this.before?.dispose();
-    this.before = floatTarget(size, size, { half: true, linear: true });
+    this.before = s.engine!.atlas.makeDisplayCopy();
     s.viewer!.texMaterial.uniforms.before.value = this.before.texture;
     s.viewer!.showPlan(s.plan!.points, s.plan!.views, 1.6, overlayColor);
     s.viewer!.resize(width, height);
@@ -76,7 +70,7 @@ export class Demo {
   }
 
   private applyWave(i: number) {
-    for (const v of this.waves[i]) this.session.engine!.paint(v.spec, v.comp);
+    for (const v of this.waves[i]) this.session.engine!.paint(v.spec, v.comp, v.detail);
   }
 
   /**
@@ -103,8 +97,7 @@ export class Demo {
     const u = this.session.viewer!.texMaterial.uniforms;
     if (reveal > 0 && target < n) {
       if (this.revealing !== target) {
-        this.copy.uniforms.src.value = e.atlas.display.texture;
-        e.gpu.pass(this.copy, this.before!);
+        e.atlas.copyDisplay(this.before!);
         for (let w = target; w < end; w++) this.applyWave(w);
         this.revealing = target;
         this.revealEnd = end;

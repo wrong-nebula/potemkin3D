@@ -1,0 +1,259 @@
+{
+  "resolution": [
+    1280,
+    720
+  ],
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+  "browser": "157.0.8103.51",
+  "method": "Paired timing: one complete render per animation frame, adjacent before/after frames alternating AB/BA order. GPU completion synchronized outside each timed query to isolate tile-based GPU work. Two fresh contexts per scene; 24 warmup frames and 96 pairs per pose per run. EXT_disjoint_timer_query_webgl2; static shadows cached; no post-processing or dynamic resolution. CPU is submission time. Texture figures describe required payload; both variants share base textures in the timing context.",
+  "scenes": {
+    "luxor": {
+      "views": [
+        {
+          "view": "close",
+          "before": {
+            "gpuMedianMs": 1.779385,
+            "gpuP95Ms": 3.871125,
+            "runMedianRangeMs": [
+              0.7968535,
+              2.7619165
+            ],
+            "cpuMedianMs": 0.30000000004656613,
+            "textureMiB": 405.99998474121094,
+            "detailMiB": 0.0,
+            "drawCalls": 4,
+            "triangles": 40026,
+            "samples": 192
+          },
+          "after": {
+            "gpuMedianMs": 2.11533275,
+            "gpuP95Ms": 4.271416,
+            "runMedianRangeMs": [
+              1.1106245,
+              3.120041
+            ],
+            "cpuMedianMs": 0.30000000016298145,
+            "textureMiB": 408.6666498184204,
+            "detailMiB": 2.6666650772094727,
+            "drawCalls": 4,
+            "triangles": 40026,
+            "samples": 192
+          },
+          "pairedMedianDeltaMs": 0.23061425000000002,
+          "pairedDeltaRunRangeMs": [
+            0.1463540000000001,
+            0.31487449999999995
+          ],
+          "gpuDeltaMs": 0.3359477499999999,
+          "gpuDeltaPercent": 18.87999224451144
+        },
+        {
+          "view": "wide",
+          "before": {
+            "gpuMedianMs": 1.9659475,
+            "gpuP95Ms": 4.445156,
+            "runMedianRangeMs": [
+              0.8916040000000001,
+              3.040291
+            ],
+            "cpuMedianMs": 0.25000000023283064,
+            "textureMiB": 405.99998474121094,
+            "detailMiB": 0.0,
+            "drawCalls": 4,
+            "triangles": 40026,
+            "samples": 192
+          },
+          "after": {
+            "gpuMedianMs": 2.1958434999999996,
+            "gpuP95Ms": 4.441177,
+            "runMedianRangeMs": [
+              1.1295625,
+              3.2621244999999996
+            ],
+            "cpuMedianMs": 0.30000000004656613,
+            "textureMiB": 408.6666498184204,
+            "detailMiB": 2.6666650772094727,
+            "drawCalls": 4,
+            "triangles": 40026,
+            "samples": 192
+          },
+          "pairedMedianDeltaMs": 0.30417724999999995,
+          "pairedDeltaRunRangeMs": [
+            0.24279199999999995,
+            0.3655625
+          ],
+          "gpuDeltaMs": 0.22989599999999966,
+          "gpuDeltaPercent": 11.69390332142642
+        },
+        {
+          "view": "grazing",
+          "before": {
+            "gpuMedianMs": 2.0397700000000003,
+            "gpuP95Ms": 4.63653075,
+            "runMedianRangeMs": [
+              0.8960825,
+              3.1834575000000003
+            ],
+            "cpuMedianMs": 0.30000000004656613,
+            "textureMiB": 405.99998474121094,
+            "detailMiB": 0.0,
+            "drawCalls": 4,
+            "triangles": 40026,
+            "samples": 192
+          },
+          "after": {
+            "gpuMedianMs": 2.2369992499999998,
+            "gpuP95Ms": 4.7786035,
+            "runMedianRangeMs": [
+              1.158874,
+              3.3151244999999996
+            ],
+            "cpuMedianMs": 0.3499999998603016,
+            "textureMiB": 408.6666498184204,
+            "detailMiB": 2.6666650772094727,
+            "drawCalls": 4,
+            "triangles": 40026,
+            "samples": 192
+          },
+          "pairedMedianDeltaMs": 0.28346900000000014,
+          "pairedDeltaRunRangeMs": [
+            0.26329250000000004,
+            0.30364550000000023
+          ],
+          "gpuDeltaMs": 0.19722924999999947,
+          "gpuDeltaPercent": 9.669190644043173
+        }
+      ],
+      "preservation": {
+        "protectedPixels": 834984,
+        "maxAlbedoByteError": 0,
+        "note": "Compared rendered albedo with the detail layer disabled/enabled on exactly the protected visible pixels. This checks the mask, not semantic completeness of automatic detection."
+      }
+    },
+    "sento": {
+      "views": [
+        {
+          "view": "close",
+          "before": {
+            "gpuMedianMs": 3.562958,
+            "gpuP95Ms": 7.57631225,
+            "runMedianRangeMs": [
+              2.1495205,
+              4.976395500000001
+            ],
+            "cpuMedianMs": 0.4500000001862645,
+            "textureMiB": 87.33332824707031,
+            "detailMiB": 0.0,
+            "drawCalls": 18,
+            "triangles": 3620,
+            "samples": 192
+          },
+          "after": {
+            "gpuMedianMs": 3.90608325,
+            "gpuP95Ms": 7.7363535,
+            "runMedianRangeMs": [
+              2.2648539999999997,
+              5.5473125
+            ],
+            "cpuMedianMs": 0.49999999976716936,
+            "textureMiB": 94.00096988677979,
+            "detailMiB": 6.667641639709473,
+            "drawCalls": 18,
+            "triangles": 3620,
+            "samples": 192
+          },
+          "pairedMedianDeltaMs": 0.15966625000000007,
+          "pairedDeltaRunRangeMs": [
+            0.04083250000000016,
+            0.27849999999999997
+          ],
+          "gpuDeltaMs": 0.34312524999999994,
+          "gpuDeltaPercent": 9.630347873873335
+        },
+        {
+          "view": "wide",
+          "before": {
+            "gpuMedianMs": 3.89157225,
+            "gpuP95Ms": 7.626562249999999,
+            "runMedianRangeMs": [
+              2.034687,
+              5.7484575
+            ],
+            "cpuMedianMs": 0.625,
+            "textureMiB": 87.33332824707031,
+            "detailMiB": 0.0,
+            "drawCalls": 24,
+            "triangles": 4166,
+            "samples": 192
+          },
+          "after": {
+            "gpuMedianMs": 3.44186425,
+            "gpuP95Ms": 7.6071875,
+            "runMedianRangeMs": [
+              2.186312,
+              4.6974165
+            ],
+            "cpuMedianMs": 0.6000000000931323,
+            "textureMiB": 94.00096988677979,
+            "detailMiB": 6.667641639709473,
+            "drawCalls": 24,
+            "triangles": 4166,
+            "samples": 192
+          },
+          "pairedMedianDeltaMs": 0.11248924999999982,
+          "pairedDeltaRunRangeMs": [
+            0.010603499999999655,
+            0.21437499999999998
+          ],
+          "gpuDeltaMs": -0.4497079999999998,
+          "gpuDeltaPercent": -11.555946314500515
+        },
+        {
+          "view": "grazing",
+          "before": {
+            "gpuMedianMs": 1.74744775,
+            "gpuP95Ms": 7.628354,
+            "runMedianRangeMs": [
+              0.7749165,
+              2.7199790000000004
+            ],
+            "cpuMedianMs": 0.4749999998603016,
+            "textureMiB": 87.33332824707031,
+            "detailMiB": 0.0,
+            "drawCalls": 19,
+            "triangles": 3644,
+            "samples": 192
+          },
+          "after": {
+            "gpuMedianMs": 2.1398535,
+            "gpuP95Ms": 7.79747825,
+            "runMedianRangeMs": [
+              1.4082284999999999,
+              2.8714785000000003
+            ],
+            "cpuMedianMs": 0.5499999998137355,
+            "textureMiB": 94.00096988677979,
+            "detailMiB": 6.667641639709473,
+            "drawCalls": 19,
+            "triangles": 3644,
+            "samples": 192
+          },
+          "pairedMedianDeltaMs": 0.19119799999999995,
+          "pairedDeltaRunRangeMs": [
+            0.16552049999999996,
+            0.21687549999999994
+          ],
+          "gpuDeltaMs": 0.39240575,
+          "gpuDeltaPercent": 22.455936093082038
+        }
+      ],
+      "preservation": {
+        "protectedPixels": 20930,
+        "maxAlbedoByteError": 0,
+        "note": "Compared rendered albedo with the detail layer disabled/enabled on exactly the protected visible pixels. This checks the mask, not semantic completeness of automatic detection."
+      }
+    }
+  },
+  "originalAssetsUnchanged": true,
+  "shaderErrors": 0
+}

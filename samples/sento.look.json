@@ -1,0 +1,19 @@
+{
+  "level": "samples/sento.glb",
+  "lighting": "indoor-soft",
+  "atlas": 4096,
+  "area": [-5.8, 0, -1.8, 5.8, 2.2, 4.3],
+  "wording": "photo",
+  "style": "the bathing hall of an old Tokyo public bathhouse (a sento) from the 1950s, empty, clean and well kept: small square glazed tiles everywhere, white on the walls up to shoulder height with a band of cobalt blue along the top, pale blue-grey mosaic tiles on the floor with dark grout, cobalt blue tiles round the baths; pale mint-green painted plaster above the tiles, a little water-stained; a dark timber plank ceiling with a white-painted glazed lantern; over the baths a wall-wide hand-painted mural of Mount Fuji above a blue lake with pine trees, in flat enamel colours; clear, still bath water; chrome taps, small mirrors, yellow plastic bowls and stools",
+  "floorStyle": "a bathhouse floor of small square mosaic tiles: pale blue-grey, with dark grout, wet",
+  "setting": {
+    "place": "the old public bathhouses of Tokyo, the real places this scene is built after",
+    "carriers": "Walls, bath rims, columns and partitions",
+    "details": "tile joints, a band of coloured tiles, small drain grates and faint water stains",
+    "additions": ["people", "bathers", "towels", "bottles", "soap", "hoses", "signs", "posters", "writing", "lockers", "plants", "buckets", "curtains", "pipes", "steam"],
+    "materials": "glazed tiles, painted plaster, timber or glass",
+    "fill": "carrying on its tiles and joints at the same size, with nothing new set against it",
+    "ground": "bare wet tiles",
+    "light": "soft, even daylight from the lantern overhead, with no cast shadows and no sunlit patches"
+  }
+}

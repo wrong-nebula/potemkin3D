@@ -1,6 +1,10 @@
-node_modules/
+# Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md.
+node_modules
 dist/
 runs/
+# fal key for the dev server and scripts (FAL_KEY=...)
+.env
+.env.*
 spike/out/
 spike/.venv/
 video/out/
@@ -17,3 +21,26 @@ video/audio/beats_v1.json
 samples/village_v1.glb
 # Patch's brand kit (Patch Pixel is Patch's own typeface): link or copy it here to rebuild the video and README art
 brand-kit
+
+# the walk-through built as a static site (scripts/build-site.mjs)
+deploy/*
+!deploy/potemkin3d/
+!deploy/potemkin3d/runs/
+!deploy/potemkin3d/runs/**
+
+# local browser checks and visual comparisons
+.playwright-mcp/
+output/playwright/
+
+# film stills used as reference for the hangar sample: not ours to redistribute (references/hangar/CREDITS.md)
+references/hangar/
+
+# Local state and nonredistributable inputs
+.DS_Store
+.claude/
+.vercel/
+output/
+dist-potemkin/
+!/.env.example
+references/luxor/01_hypostyle_columns.jpg
+references/luxor/raw/01_hypostyle_columns.jpg

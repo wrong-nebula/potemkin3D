@@ -1,0 +1,24 @@
+{
+  "stone": {
+    "size": 512,
+    "regions": 0,
+    "heightSpanMetres": 0.0012,
+    "baseRoughness": 0.82,
+    "note": "Inferred height with artist-selected physical amplitude, not measured displacement."
+  },
+  "tile": {
+    "size": 1024,
+    "regions": 169,
+    "heightSpanMetres": 0.002,
+    "baseRoughness": 0.32,
+    "note": "Inferred height with artist-selected physical amplitude, not measured displacement."
+  },
+  "originalAssets": {
+    "deploy/luxor/level_2k.glb": "96d5a12fb788d8332a559514936df025df569e4d69d851cd78a7baca353e3f09",
+    "deploy/luxor/hi/p0_base.jpg": "5ea06dbc3155e23b8707be6d32175b626acbd37d032b09e33e3cca80a7b50033",
+    "experiments/sento/out/world/hall/hall_textured.glb": "2eb483a79ecaed734291b0696cd9e236de9e84585b3f2b8f63352ca380a64977",
+    "experiments/sento/out/world/hall/texture.jpg": "c7e769c6fb011dc5f3ae32329517ff73487d509097bf1cba53c16f162ad54768",
+    "experiments/sento/out/world/hall/normal.png": "ef4e11e031c7667789215ae648a02ae5a62916e8393a66ecb0aa0b1a43be512a",
+    "experiments/sento/out/world/hall/orm.jpg": "6a8425e93de1156ff82e104bcf8f5b5f871d5101e7e4ef7f93dbb9b2f5421033"
+  }
+}

@@ -1,3 +1,4 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { distanceTo } from './composite';
 import type { ViewSpec } from './views';
@@ -72,6 +73,9 @@ export class SkyDome {
       for (let x = 0; x < size; x += 2) {
         const i = y * size + x;
         if (geometry[i] || dist[i] < margin) continue;
+        // not painted in this view: a prop's view (core/proppass.ts) paints the prop alone and leaves the rest transparent black,
+        // and sixty of those among a run's views turned its sky black when the run was loaded again
+        if (!image[4 * i + 3] && !image[4 * i] && !image[4 * i + 1] && !image[4 * i + 2]) continue;
         v.set(((x + 0.5) / size) * 2 - 1, 1 - ((y + 0.5) / size) * 2, 0.5).applyMatrix4(inv).applyMatrix4(rot).normalize();
         const e = Math.asin(Math.max(-1, Math.min(1, v.y)));
         if (e < LO) continue;   // near the horizon models paint distant land, not sky

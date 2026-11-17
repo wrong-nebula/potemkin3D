@@ -1,0 +1,346 @@
+{
+  "version": 1,
+  "scene": "tatooine",
+  "description": "Original Tatooine-inspired desert courtyard, no external assets",
+  "units": "metres",
+  "coordinateSystem": "glTF Y-up",
+  "blenderCoordinateSystem": "Z-up",
+  "geometry": {
+    "triangles": 25408,
+    "objects": 19,
+    "labels": [
+      "sand and worn stone courtyard",
+      "west ochre plaster dwelling",
+      "arched plaster surrounds",
+      "recessed ribbed metal doors",
+      "rounded plaster domes",
+      "plaster buttresses and roof parapets",
+      "north pale plaster cantina",
+      "east pale plaster dwelling",
+      "east utility workshop",
+      "dark inset vents and panels",
+      "exposed utility pipes",
+      "rooftop tanks and chimneys",
+      "sandstone steps and low walls",
+      "plaster street gateway",
+      "moisture vaporator white metal",
+      "dark vaporator machinery",
+      "ribbed cargo crates",
+      "ceramic storage jars",
+      "plaster benches and trough"
+    ],
+    "uv": "one global nonoverlapping atlas shared by both exports"
+  },
+  "bounds": {
+    "min": [
+      -14,
+      -0.18,
+      -14
+    ],
+    "max": [
+      14,
+      6.0,
+      14
+    ]
+  },
+  "playArea": [
+    -5.5,
+    0,
+    -4.0,
+    6.5,
+    2.5,
+    8.5
+  ],
+  "cameras": [
+    {
+      "id": 0,
+      "name": "courtyard_north",
+      "eye": [
+        0,
+        1.7,
+        7.6
+      ],
+      "target": [
+        0,
+        2.05,
+        -4.0
+      ],
+      "fov": 65,
+      "position": [
+        0,
+        1.7,
+        7.6
+      ],
+      "yaw": -0.0,
+      "pitch": 0.03016325545239928,
+      "blenderEye": [
+        0,
+        -7.6,
+        1.7
+      ],
+      "blenderTarget": [
+        0,
+        4.0,
+        2.05
+      ]
+    },
+    {
+      "id": 1,
+      "name": "workshop_east",
+      "eye": [
+        -4.5,
+        1.7,
+        3.0
+      ],
+      "target": [
+        7.3,
+        2.0,
+        0
+      ],
+      "fov": 65,
+      "position": [
+        -4.5,
+        1.7,
+        3.0
+      ],
+      "yaw": -1.3218336170845875,
+      "pitch": 0.024634887828187013,
+      "blenderEye": [
+        -4.5,
+        -3.0,
+        1.7
+      ],
+      "blenderTarget": [
+        7.3,
+        0,
+        2.0
+      ]
+    },
+    {
+      "id": 2,
+      "name": "domes_west",
+      "eye": [
+        5.0,
+        1.7,
+        3.0
+      ],
+      "target": [
+        -6.0,
+        2.0,
+        -3.0
+      ],
+      "fov": 65,
+      "position": [
+        5.0,
+        1.7,
+        3.0
+      ],
+      "yaw": 1.0714496051147666,
+      "pitch": 0.023938028809098556,
+      "blenderEye": [
+        5.0,
+        -3.0,
+        1.7
+      ],
+      "blenderTarget": [
+        -6.0,
+        3.0,
+        2.0
+      ]
+    },
+    {
+      "id": 3,
+      "name": "gateway_south",
+      "eye": [
+        -1.0,
+        1.7,
+        -3.1
+      ],
+      "target": [
+        4.1,
+        2.1,
+        8.4
+      ],
+      "fov": 65,
+      "position": [
+        -1.0,
+        1.7,
+        -3.1
+      ],
+      "yaw": -2.7241754244411736,
+      "pitch": 0.031785419764235094,
+      "blenderEye": [
+        -1.0,
+        3.1,
+        1.7
+      ],
+      "blenderTarget": [
+        4.1,
+        -8.4,
+        2.1
+      ]
+    },
+    {
+      "id": 4,
+      "name": "cantina_close",
+      "eye": [
+        4.6,
+        1.7,
+        -2.9
+      ],
+      "target": [
+        -1.0,
+        2.2,
+        -6.3
+      ],
+      "fov": 65,
+      "position": [
+        4.6,
+        1.7,
+        -2.9
+      ],
+      "yaw": 1.0251412594935354,
+      "pitch": 0.07617264189358619,
+      "blenderEye": [
+        4.6,
+        2.9,
+        1.7
+      ],
+      "blenderTarget": [
+        -1.0,
+        6.3,
+        2.2
+      ]
+    },
+    {
+      "id": 5,
+      "name": "dwelling_close",
+      "eye": [
+        -3.8,
+        1.7,
+        0.9
+      ],
+      "target": [
+        -7.5,
+        1.7,
+        -3.1
+      ],
+      "fov": 65,
+      "position": [
+        -3.8,
+        1.7,
+        0.9
+      ],
+      "yaw": 0.7464568148309421,
+      "pitch": 0.0,
+      "blenderEye": [
+        -3.8,
+        -0.9,
+        1.7
+      ],
+      "blenderTarget": [
+        -7.5,
+        3.1,
+        1.7
+      ]
+    }
+  ],
+  "novelCameras": [
+    {
+      "id": 100,
+      "name": "novel_courtyard",
+      "eye": [
+        0,
+        1.7,
+        4.4
+      ],
+      "target": [
+        0,
+        2.1,
+        -4.8
+      ],
+      "fov": 65,
+      "position": [
+        0,
+        1.7,
+        4.4
+      ],
+      "yaw": -0.0,
+      "pitch": 0.043450872623475766,
+      "blenderEye": [
+        0,
+        -4.4,
+        1.7
+      ],
+      "blenderTarget": [
+        0,
+        4.8,
+        2.1
+      ]
+    },
+    {
+      "id": 101,
+      "name": "novel_vaporator",
+      "eye": [
+        -2.8,
+        1.7,
+        -1.0
+      ],
+      "target": [
+        5.0,
+        2.0,
+        -1.2
+      ],
+      "fov": 65,
+      "position": [
+        -2.8,
+        1.7,
+        -1.0
+      ],
+      "yaw": -1.545160912539653,
+      "pitch": 0.03842996441663441,
+      "blenderEye": [
+        -2.8,
+        1.0,
+        1.7
+      ],
+      "blenderTarget": [
+        5.0,
+        1.2,
+        2.0
+      ]
+    },
+    {
+      "id": 102,
+      "name": "novel_gateway",
+      "eye": [
+        3.1,
+        1.7,
+        1.8
+      ],
+      "target": [
+        3.6,
+        2.0,
+        9.3
+      ],
+      "fov": 65,
+      "position": [
+        3.1,
+        1.7,
+        1.8
+      ],
+      "yaw": -3.0750244898139694,
+      "pitch": 0.03989022812583585,
+      "blenderEye": [
+        3.1,
+        -1.8,
+        1.7
+      ],
+      "blenderTarget": [
+        3.6,
+        -9.3,
+        2.0
+      ]
+    }
+  ]
+}

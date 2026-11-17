@@ -1,0 +1,42 @@
+[
+  {
+    "base": "p0_base.jpg",
+    "normal": "p0_normal.jpg",
+    "orm": "p0_orm.jpg",
+    "size": 4096,
+    "height": "p0_height.png",
+    "heightLow": "p0_height_2k.png",
+    "heightSize": 4096,
+    "heightSource": "fal-ai/patina"
+  },
+  {
+    "base": "p1_base.jpg",
+    "normal": "p1_normal.jpg",
+    "orm": "p1_orm.jpg",
+    "size": 4096,
+    "height": "p1_height.png",
+    "heightLow": "p1_height_2k.png",
+    "heightSize": 4096,
+    "heightSource": "fal-ai/patina"
+  },
+  {
+    "base": "p2_base.jpg",
+    "normal": "p2_normal.jpg",
+    "orm": "p2_orm.jpg",
+    "size": 4096,
+    "height": "p2_height.png",
+    "heightLow": "p2_height_2k.png",
+    "heightSize": 4096,
+    "heightSource": "fal-ai/patina"
+  },
+  {
+    "base": "p3_base.jpg",
+    "normal": "p3_normal.jpg",
+    "orm": "p3_orm.jpg",
+    "size": 4096,
+    "height": "p3_height.png",
+    "heightLow": "p3_height_2k.png",
+    "heightSize": 4096,
+    "heightSource": "fal-ai/patina"
+  }
+]

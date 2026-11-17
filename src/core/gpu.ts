@@ -1,3 +1,4 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 
 /** Shared WebGL2 renderer plus helpers for full-screen passes and render-target readback. */
@@ -18,27 +19,33 @@ export class Gpu {
     this.quadScene.add(this.quad);
   }
 
-  /** Draw a full-screen shader into `target` (null = canvas). Clears first unless `clear` is false. */
-  pass(material: THREE.Material, target: THREE.WebGLRenderTarget | null, clear = true) {
+  /**
+   * Draw a full-screen shader into `target` (null = canvas). Clears first unless `clear` is false.
+   * @param layer which layer, when `target` is an array of textures
+   */
+  pass(material: THREE.Material, target: THREE.WebGLRenderTarget | null, clear = true, layer = 0) {
     const r = this.renderer;
     this.quad.material = material;
     const prevTarget = r.getRenderTarget();
+    const prevLayer = r.getActiveCubeFace();
     const prevClear = r.autoClear;
     r.autoClear = clear;
-    r.setRenderTarget(target);
+    r.setRenderTarget(target, layer);
     r.render(this.quadScene, this.quadCam);
-    r.setRenderTarget(prevTarget);
+    r.setRenderTarget(prevTarget, prevLayer);
     r.autoClear = prevClear;
   }
 
   /** Render a scene into a target with an optional clear colour. */
-  draw(scene: THREE.Scene, camera: THREE.Camera, target: THREE.WebGLRenderTarget | null, clear: THREE.ColorRepresentation | null = 0x000000, clearAlpha = 0) {
+  draw(scene: THREE.Scene, camera: THREE.Camera, target: THREE.WebGLRenderTarget | null, clear: THREE.ColorRepresentation | null = 0x000000, clearAlpha = 0,
+    layer = 0) {
     const r = this.renderer;
     const prevTarget = r.getRenderTarget();
+    const prevLayer = r.getActiveCubeFace();
     const prevClear = r.autoClear;
     const prevColor = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
-    r.setRenderTarget(target);
+    r.setRenderTarget(target, layer);
     if (clear !== null) {
       r.setClearColor(clear, clearAlpha);
       r.clear(true, true, true);
@@ -47,7 +54,7 @@ export class Gpu {
     r.render(scene, camera);
     r.autoClear = prevClear;
     r.setClearColor(prevColor, prevAlpha);
-    r.setRenderTarget(prevTarget);
+    r.setRenderTarget(prevTarget, prevLayer);
   }
 
   /** RGBA8 readback. Rows come back bottom-up (GL order); `topDown` flips them to image order. */

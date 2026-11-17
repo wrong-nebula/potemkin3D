@@ -1,0 +1,37 @@
+{
+  "level": "samples/luxor.glb",
+  "lighting": "overcast",
+  "atlas": 8192,
+  "wording": "survey",
+  "style": "an ancient Egyptian temple at Luxor as it stands today, roofless under the open sky: massive courses of warm orange-gold sandstone blocks with fine open joints, every wall, column, architrave and gateway carved all over in sunk relief with registers of hieroglyphs, cartouches and tall figures of kings and gods, the edges chipped and sand-worn, with faint traces of red, blue and ochre paint; pale sand-coloured sandstone paving slabs, worn smooth, with sand in the joints",
+  "floorStyle": "ancient sandstone paving: large irregular slabs of pale sand-coloured stone, worn smooth, with sand in the joints",
+  "setting": {
+    "place": "the temples of Luxor in Egypt, the real place this scene is built after",
+    "carriers": "Walls, columns, gateways and architraves",
+    "details": "carved hieroglyphs, cartouches, figures in sunk relief and the joints between the blocks",
+    "additions": [
+      "people",
+      "scaffolding",
+      "ropes",
+      "railings",
+      "signs",
+      "lamps",
+      "floodlights",
+      "plants",
+      "palm trees",
+      "benches",
+      "statues",
+      "modern buildings"
+    ],
+    "materials": "courses of sandstone blocks, carved relief or granite",
+    "fill": "carrying on its courses of blocks and its carving at the same size, with nothing new set against it",
+    "ground": "bare stone paving",
+    "light": "soft, even light, as in open shade under a bright sky: no direct sunlight, no cast shadows and no sunlit patches"
+  },
+  "styleImages": [
+    "/references/luxor/02_wall_relief.jpg",
+    "/references/luxor/03_column_shafts.jpg",
+    "/references/luxor/04_relief_corridor.jpg",
+    "/references/luxor/05_relief_detail.jpg"
+  ]
+}

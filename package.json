@@ -1,9 +1,9 @@
 {
-  "name": "trompe",
+  "name": "potemkin3d",
   "version": "0.1.0",
-  "description": "AI texturing for whole game levels: plan cameras, paint with image models, project and bake.",
+  "description": "AI-painted 3D environments, view-aware texture atlases and real-time walkthroughs, extending Patch Trompe.",
   "license": "Apache-2.0",
-  "repository": "github:Patch-gg/trompe",
+  "repository": "github:wrong-nebula/potemkin3D",
   "type": "module",
   "private": true,
   "scripts": {
@@ -12,10 +12,17 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "texture": "node scripts/texture.mjs",
-    "capture": "node scripts/capture.mjs"
+    "capture": "node scripts/capture.mjs",
+    "pbr": "node scripts/pbr.mjs",
+    "measure": "node scripts/measure.mjs",
+    "validate": "node scripts/validate.mjs",
+    "benchmark": "node scripts/benchmark.mjs",
+    "benchmark:compare": "node scripts/benchmark-run.mjs",
+    "build:scenes": "node scripts/build-potemkin.mjs"
   },
   "dependencies": {
     "@fal-ai/client": "^1.10.1",
+    "@huggingface/transformers": "^4.3.2",
     "three": "^0.186.1",
     "three-mesh-bvh": "^0.9.16"
   },
@@ -26,5 +33,9 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
-  }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "x-potemkin-notice": "Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md."
 }

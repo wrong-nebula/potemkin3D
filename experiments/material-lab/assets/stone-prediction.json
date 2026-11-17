@@ -1,0 +1,11 @@
+{
+  "model": "fal-ai/patina",
+  "seed": 1701,
+  "requestId": "01a1d09c-5fec-7c51-9b14-a3e9f081dd75",
+  "elapsedSeconds": 70.44884654100001,
+  "outputs": [
+    "stone-basecolor.png",
+    "stone-height.png",
+    "stone-roughness.png"
+  ]
+}

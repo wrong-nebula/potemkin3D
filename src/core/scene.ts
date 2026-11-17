@@ -1,18 +1,107 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH } from 'three-mesh-bvh';
+import { splitParts, type Part } from './parts';
 
 /** A level flattened into one world-space mesh with a single UV set (TEXCOORD_0). */
 export interface Level {
   name: string;
-  /** Part names from the file (glTF material, else mesh name); the `label` vertex attribute indexes this. */
+  /**
+   * Part names; the `label` vertex attribute indexes this. From the file (glTF material, else mesh name) when it
+   * names more than one part. Otherwise the level is split into its connected shapes (`shapes`), whose names start
+   * out empty and are filled in by core/naming.ts or by hand.
+   */
   labels: string[];
+  /** Set when the parts are the level's connected shapes rather than names from the file. */
+  shapes?: Part[];
   geometry: THREE.BufferGeometry;
   bvh: MeshBVH;
   bounds: THREE.Box3;
   triangles: number;
   surfaceArea: number;
+  /**
+   * Where players can be, when the level has more floor than that (the neighbours' rooftops outside a loft's
+   * windows): camera spots are only placed with the eye inside this box.
+   */
+  playArea?: THREE.Box3;
+  /**
+   * Eye positions given by hand, kept beside whatever the planner finds. The planner joins standing spots by straight
+   * walks of a few metres, so a floor reached only by a long flight of stairs (a mezzanine, a gantry deck) is a play
+   * area of its own, too small to keep, and gets no camera: name a few spots on it. They ride along with the play
+   * area wherever that goes: the triples after its six numbers.
+   */
+  spots?: THREE.Vector3[];
+  /** Set when the texture coordinates aren't the file's own but a layout weighted by what players see (core/layout.ts). */
+  layout?: LevelLayout;
+  /** Set when the texture is several: the islands were packed again over a grid of pages (core/layout.ts pagedLayout). */
+  pages?: LevelPages;
+}
+
+export interface LevelPages {
+  /** Pages along each side: the texture is `grid` x `grid` textures. */
+  grid: number;
+  /** How many times larger each island is on its page than it was in the one texture, along each axis. */
+  gain: number;
+  islands: number;
+  /** The share of each page its islands' boxes take. */
+  fill: number[];
+  /** Islands too long for a page that were cut, and the pieces they are now (core/layout.ts cutIslands). */
+  cut?: number;
+  pieces?: number;
+  /** Fingerprint of the texture coordinates in use. */
+  hash: string;
+  seconds: number;
+}
+
+export interface LevelLayout {
+  /**
+   * 'seen' (when unset): faces nobody sees shrunk and all packed again. 'near': faces joined into strips, each island
+   * sized by how near a player gets to it, and all packed again.
+   */
+  kind?: 'seen' | 'near';
+  /** With 'near': the strips made of the file's islands, and how many islands went into them. */
+  strips?: number;
+  joined?: number;
+  /** With 'near': the islands the file had, and how many are drawn at full size (a player gets near them). */
+  before?: number;
+  full?: number;
+  /** With 'near': islands too long for a page that were cut, and the pieces they are now (core/layout.ts cutIslands). */
+  cut?: number;
+  pieces?: number;
+  /** False when the weighted layout gained too little and the file's own was kept. */
+  applied: boolean;
+  /** How much denser the faces players see are than in the file's layout, along each axis. */
+  gain: number;
+  /** Share of the level's surface, and of the file's texture, that players can see. */
+  seenSurface: number;
+  seenTexture: number;
+  islands: number;
+  /** Fingerprint of the texture coordinates in use. */
+  hash: string;
+  seconds: number;
+}
+
+/**
+ * Give a level other triangles for the same surface (core/layout.ts cutIslands cuts faces in pieces): its geometry,
+ * the tree its rays are cast through, and its counts.
+ */
+export function setTriangles(level: Level, t: { position: Float32Array; normal: Float32Array; uv: Float32Array; label: Float32Array }) {
+  const g = level.geometry;
+  g.setIndex(null);   // the tree's own, over the old triangles
+  g.setAttribute('position', new THREE.BufferAttribute(t.position, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(t.normal, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(t.uv, 2));
+  g.setAttribute('label', new THREE.BufferAttribute(t.label, 1));
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  level.bvh = new MeshBVH(g);
+  level.triangles = t.position.length / 9;
+  if (level.shapes) {
+    for (const s of level.shapes) s.triangles = 0;
+    for (let i = 0; i < t.label.length; i += 3) { const s = level.shapes[t.label[i]]; if (s) s.triangles++; }
+  }
 }
 
 export async function loadLevel(source: string | ArrayBuffer, name = 'level'): Promise<Level> {
@@ -43,6 +132,19 @@ export async function loadLevel(source: string | ArrayBuffer, name = 'level'): P
   if (!parts.length) throw new Error('no meshes in the file');
   const geometry = parts.length === 1 ? parts[0] : mergeGeometries(parts, false);
   if (!geometry) throw new Error('could not merge meshes');
+  // A file that names nothing (one mesh, one material) still has parts: its connected shapes.
+  let shapes: Part[] | undefined;
+  if (labels.length === 1) {
+    const split = splitParts(geometry.getAttribute('position').array);
+    if (split.parts.length > 1) {
+      const label = geometry.getAttribute('label');
+      for (let v = 0; v < label.count; v++) label.setX(v, split.of[Math.floor(v / 3)]);
+      label.needsUpdate = true;
+      shapes = split.parts;
+      labels.length = 0;
+      labels.push(...split.parts.map(() => ''));
+    }
+  }
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   const bvh = new MeshBVH(geometry);
@@ -58,7 +160,7 @@ export async function loadLevel(source: string | ArrayBuffer, name = 'level'): P
     tri.setFromAttributeAndIndices(pos, a, b, c);
     area += tri.getArea();
   }
-  return { name, labels, geometry, bvh, bounds: geometry.boundingBox!.clone(), triangles, surfaceArea: area };
+  return { name, labels, shapes, geometry, bvh, bounds: geometry.boundingBox!.clone(), triangles, surfaceArea: area };
 }
 
 /** A readable part name: material name if it isn't a default, else the mesh name, without numeric suffixes. */

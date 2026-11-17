@@ -1,3 +1,4 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 /** Small helpers between RGBA arrays, canvases, bitmaps and data URLs (browser main thread). */
 
 export function toCanvas(data: Uint8ClampedArray, w: number, h: number): HTMLCanvasElement {
@@ -17,8 +18,13 @@ export function toBlob(data: Uint8ClampedArray, w: number, h: number, type = 'im
     toCanvas(data, w, h).toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), type, quality));
 }
 
+/** An RGBA image scaled to `to` x `to` pixels. */
+export function resizeRGBA(data: Uint8ClampedArray, w: number, h: number, to: number): Uint8ClampedArray {
+  return to === w && to === h ? data : bitmapToRGBA(toCanvas(data, w, h), to, to);
+}
+
 /** Draw a bitmap scaled to w x h and return its pixels (top-down RGBA). */
-export function bitmapToRGBA(bmp: ImageBitmap | HTMLImageElement, w: number, h: number): Uint8ClampedArray {
+export function bitmapToRGBA(bmp: ImageBitmap | HTMLImageElement | HTMLCanvasElement, w: number, h: number): Uint8ClampedArray {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;

@@ -1,3 +1,4 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -9,6 +10,7 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "noEmit": true,
     "types": ["node"]
   },

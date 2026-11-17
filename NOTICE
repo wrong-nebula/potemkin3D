@@ -1,0 +1,16 @@
+Potemkin 3D
+
+This product includes and modifies Trompe, made by Patch.
+Original project: https://github.com/Patch-gg/trompe
+Original license: Apache License, Version 2.0 (see LICENSE).
+
+Potemkin changes are maintained by wrong-nebula and contributors.
+They include geometry-fidelity checks, incremental run saving, texture layout
+and multi-page atlases, targeted repair passes, material processing, and the
+Potemkin walkthroughs. See README.md and PROVENANCE.md for scope and source.
+
+The Patch name, mark, wordmark and Patch Pixel belong to Patch and are not
+covered by this project's license. No affiliation or endorsement is implied.
+
+Third-party photographs, fonts and bundled libraries retain their respective
+licenses; see THIRD_PARTY_NOTICES.md and ASSET_LICENSES.md.

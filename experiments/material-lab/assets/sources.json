@@ -1,0 +1,19 @@
+{
+  "stone": {
+    "file": "references/luxor/05_relief_detail.jpg",
+    "cropPixels": [
+      530,
+      774,
+      716,
+      960
+    ],
+    "nativeCropPixels": 186,
+    "sampleMetres": 0.22,
+    "note": "Material exemplar only; no inscriptions are copied into the detail layer."
+  },
+  "tile": {
+    "file": "experiments/sento/out/world/sento/mosaic.jpg",
+    "sampleMetres": 1.0,
+    "note": "Original Sento kit exemplar; world mapping matches Kit.surface."
+  }
+}

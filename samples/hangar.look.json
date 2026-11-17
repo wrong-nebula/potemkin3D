@@ -1,0 +1,59 @@
+{
+  "level": "samples/hangar.glb",
+  "lighting": "indoor-soft",
+  "atlas": 8192,
+  "area": [-13, 0, -16, 35.35, 10, 16],
+  "spots": [
+    [-10, 5.15, 6.5],
+    [-8.2, 5.15, 6.6],
+    [-10.5, 5.15, 4.7],
+    [-9.6, 5.15, 1.6],
+    [-9.6, 5.15, -1.6],
+    [-10.3, 5.15, -5.5],
+    [-5.15, 4.65, -4.5],
+    [1.95, 4.65, -4.6]
+  ],
+  "first": "h3",
+  "fill": "h3",
+  "wording": "cel",
+  "style": "the labor hangar of a police special vehicles unit on reclaimed land in Tokyo Bay, as in Patlabor: The Movie (1989), well used but kept in order: a muted palette of grey-green, teal and pale blue-grey, with off-white and dull orange machinery and small accents of yellow-and-black hazard stripes and red; a pale grey-green painted concrete floor, scuffed, with a few oil stains, tyre marks and faded painted lines; ribbed steel wall panels in dull teal-grey, a little faded; grey-green painted steelwork; outside, massive blocks of pale grey cast concrete with formwork joints, dark water streaks under the copings, big stencilled numbers and chipped corners",
+  "floorStyle": "a painted concrete hangar floor: pale grey-green, scuffed, with a few oil stains, tyre marks and faded painted lines",
+  "setting": {
+    "place": "Patlabor: The Movie (1989) and its sequel, the animated films this scene is built after",
+    "carriers": "Walls, concrete blocks, machines, vehicles and cabinets",
+    "details": "panel seams, formwork joints, rivets, hatches, vents, grilles, stencilled numbers and hazard stripes",
+    "additions": [
+      "people",
+      "characters",
+      "robots",
+      "vehicles",
+      "consoles",
+      "screens",
+      "crates",
+      "barrels",
+      "signs",
+      "lamps",
+      "cables",
+      "hoses",
+      "ladders",
+      "scaffolding",
+      "tools",
+      "furniture",
+      "rust"
+    ],
+    "materials": "painted steel panels, cast concrete, painted concrete or bare steel",
+    "fill": "carrying on its panels, seams and joints at the same size, with nothing new set against it",
+    "ground": "bare painted concrete",
+    "light": "soft, even indoor light with no cast shadows and no sunlit patches",
+    "title": "『機動警察パトレイバー the Movie』"
+  },
+  "styleImages": [
+    "/references/hangar/01_patrol_robot.jpg",
+    "/references/hangar/02_robot_in_gantry.jpg",
+    "/references/hangar/03_platform_decks_and_walls.jpg",
+    "/references/hangar/04_office.jpg",
+    "/references/hangar/05_control_room.jpg",
+    "/references/hangar/06_cockpit.jpg"
+  ],
+  "styleMax": 6
+}

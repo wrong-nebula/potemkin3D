@@ -1,0 +1,20 @@
+{
+  "level": "samples/tatooine.glb",
+  "lighting": "overcast",
+  "atlas": 4096,
+  "wording": "survey",
+  "area": [-5.5, 0, -4.0, 6.5, 2.5, 8.5],
+  "style": "a weathered desert settlement on Tatooine, a practical science-fiction film set: pale warm ivory and dusty ochre lime plaster, rounded domes with subtle hand-trowelled grain, chipped corners and restrained sand abrasion; dull off-white painted metal moisture machinery with dark recesses, faded blue-grey ribbed metal doors and cargo crates, oxidised brown utility pipes, unglazed terracotta jars; compact pale beige sand and worn sandstone paving, fine dust along wall bases; quiet muted natural colours with no colour grading",
+  "floorStyle": "pale beige compact desert sand with sparse worn sandstone paving and fine windblown dust",
+  "setting": {
+    "place": "a Tatooine-inspired desert settlement, a practical science-fiction film set",
+    "carriers": "Plaster walls and domes, doors, machinery, pipes and crates",
+    "details": "fine plaster grain, small chips, sand abrasion, subtle grime, panel seams, ribs and fasteners",
+    "additions": ["people", "characters", "droids", "vehicles", "spaceships", "animals", "plants", "signs", "lettering", "new doorways", "new windows", "awnings", "cables", "extra buildings", "twin suns"],
+    "materials": "weathered warm plaster, painted metal, oxidised pipes, terracotta and pale sand",
+    "fill": "continuing the existing material and its fine detail at the same scale, without new structures or objects",
+    "ground": "compact pale desert sand and worn sandstone paving",
+    "light": "soft even neutral overcast daylight, no direct sunlight, cast shadows, sunlit patches or dramatic colour grading"
+  },
+  "styleImages": []
+}

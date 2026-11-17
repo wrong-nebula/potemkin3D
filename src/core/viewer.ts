@@ -1,10 +1,17 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { OUTDOOR, sunDirection, type Lighting } from './clay';
+import { aoImage, type AoMap } from './ao';
+import { ATLAS_GLSL } from './atlas';
 import type { Engine } from './engine';
+import type { PbrMaps } from './pbr';
 import { SkyDome } from './sky';
 import type { ViewSpec } from './views';
 import { makeCamera, viewDirection } from './views';
+import { WalkControls, Walker } from './walk';
+import { loadFloorDetail, installFloorDetail, type FloorDetail, type FloorDetailSpec } from './floor-detail';
+import { MATERIAL_PRESETS } from './material-presets';
 
 export const PINK = new THREE.Color('#F53CD1');
 
@@ -23,8 +30,8 @@ void main() {
 }`;
 
 const TEX_FRAG = /* glsl */ `
-uniform sampler2D atlas;
-uniform sampler2D before;
+uniform highp sampler2DArray atlas;
+uniform highp sampler2DArray before;
 uniform float useBefore;
 uniform vec3 revealOrigin;
 uniform float revealRadius;
@@ -33,14 +40,15 @@ uniform vec3 accent;
 in vec2 vUv;
 in vec3 vWorld;
 layout(location = 0) out vec4 outColor;
+${ATLAS_GLSL}
 void main() {
-  vec4 a = texture(atlas, vUv);
+  vec4 a = atlasTexel(atlas, vUv);
   if (useBefore < 0.5) {
     if (a.a <= 0.0) discard;
     outColor = vec4(a.rgb, 1.0);
     return;
   }
-  vec4 b = texture(before, vUv);
+  vec4 b = atlasTexel(before, vUv);
   if (a.a <= 0.0 && b.a <= 0.0) discard;
   float d = length(vWorld - revealOrigin);
   float t = clamp((revealRadius - d) / revealBand, 0.0, 1.0);
@@ -69,20 +77,21 @@ function litMaterial(uniforms: Record<string, THREE.IUniform>) {
     shader.vertexShader = 'varying vec3 vRevealWorld;\n' + shader.vertexShader.replace('#include <project_vertex>',
       '#include <project_vertex>\n  vRevealWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     shader.fragmentShader = /* glsl */ `
-uniform sampler2D atlas;
-uniform sampler2D before;
+uniform highp sampler2DArray atlas;
+uniform highp sampler2DArray before;
 uniform float useBefore;
 uniform vec3 revealOrigin;
 uniform float revealRadius;
 uniform float revealBand;
 uniform vec3 accent;
 varying vec3 vRevealWorld;
+${ATLAS_GLSL}
 ` + shader.fragmentShader.replace('#include <map_fragment>', /* glsl */ `
-  vec4 tA = texture(atlas, vUv);
+  vec4 tA = atlasTexel(atlas, vUv);
   vec3 tCol = tA.rgb;
   float tAlpha = tA.a > 0.0 ? 1.0 : 0.0;
   if (useBefore > 0.5) {
-    vec4 tB = texture(before, vUv);
+    vec4 tB = atlasTexel(before, vUv);
     float t = clamp((revealRadius - length(vRevealWorld - revealOrigin)) / revealBand, 0.0, 1.0);
     float edge = distance(tA, tB) > 0.002 ? smoothstep(0.0, 0.5, t) * (1.0 - smoothstep(0.5, 1.0, t)) : 0.0;
     tCol = mix(tB.a > 0.0 ? mix(tB.rgb, tA.rgb, t) : tA.rgb, accent, 0.55 * edge);
@@ -115,8 +124,22 @@ export class Viewer {
   /** Show the AI-matched sky behind textured views (otherwise the flat clay sky colour). */
   aiSky = true;
   dirty = true;
+  /** Set while walking the level in first person (see `startWalk`). */
+  walker?: Walker;
+  private walkControls?: WalkControls;
+  private orbitPose?: { position: THREE.Vector3; target: THREE.Vector3; fov: number };
+  private pbrTextures: THREE.DataTexture[] = [];
+  private aoTexture?: THREE.DataTexture;
+  /** Strength of the normal map in the lit display (0 = flat). */
+  relief = 1;
+  private floorDetail?: FloorDetail;
+  private floorDetailRevision = -1;
+  private floorDetailPaintHash?: string;
+  private floorDetailRequest = 0;
+  private removeFloorDetail?: () => void;
+  private disposed = false;
 
-  constructor(private readonly engine: Engine, dom: HTMLElement) {
+  constructor(private readonly engine: Engine, private readonly dom: HTMLElement) {
     const { level, clay } = engine;
     this.clayMesh = new THREE.Mesh(level.geometry, clay.material);
     this.clayMesh.castShadow = this.clayMesh.receiveShadow = true;
@@ -125,7 +148,7 @@ export class Viewer {
       transparent: true, depthWrite: false, depthFunc: THREE.LessEqualDepth,
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
       uniforms: {
-        atlas: { value: engine.atlas.texture }, before: { value: null }, useBefore: { value: 0 },
+        atlas: { value: engine.atlas.texture }, atlasGrid: { value: engine.atlas.grid }, before: { value: null }, useBefore: { value: 0 },
         revealOrigin: { value: new THREE.Vector3() }, revealRadius: { value: 0 }, revealBand: { value: 5 },
         accent: { value: new THREE.Vector3(PINK.r, PINK.g, PINK.b) },
       },
@@ -193,6 +216,127 @@ export class Viewer {
     this.dirty = true;
   }
 
+  /**
+   * Use (or drop) predicted normal and roughness maps in the lit display. The maps follow glTF's conventions, so
+   * the normal's Y is flipped here the way GLTFLoader flips it for meshes without tangents.
+   */
+  setPbr(maps: PbrMaps | undefined) {
+    for (const t of this.pbrTextures) t.dispose();
+    this.pbrTextures = [];
+    const m = this.litMat;
+    if (maps) {
+      const make = (data: Uint8ClampedArray) => {
+        const t = new THREE.DataTexture(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), maps.size, maps.size, THREE.RGBAFormat);
+        t.generateMipmaps = true;
+        t.minFilter = THREE.LinearMipmapLinearFilter;
+        t.magFilter = THREE.LinearFilter;
+        t.anisotropy = this.engine.gpu.renderer.capabilities.getMaxAnisotropy();
+        t.needsUpdate = true;
+        this.pbrTextures.push(t);
+        return t;
+      };
+      m.normalMap = make(maps.normal);
+      m.roughnessMap = make(maps.orm);
+      m.roughness = 1;
+    } else {
+      m.normalMap = m.roughnessMap = null;
+      m.roughness = 0.92;
+    }
+    this.setRelief(this.relief);
+    m.needsUpdate = true;
+    this.dirty = true;
+  }
+
+  /** Use (or drop) the baked ambient occlusion in the lit display: it dims the sky light in corners and under things. */
+  setAo(ao: AoMap | undefined) {
+    this.aoTexture?.dispose();
+    this.aoTexture = undefined;
+    if (ao) {
+      const t = new THREE.DataTexture(new Uint8Array(aoImage(ao).buffer), ao.size, ao.size, THREE.RGBAFormat);
+      t.generateMipmaps = true;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.needsUpdate = true;
+      this.aoTexture = t;
+    }
+    this.litMat.aoMap = this.aoTexture ?? null;
+    this.litMat.needsUpdate = true;
+    this.dirty = true;
+  }
+
+  setRelief(strength: number) {
+    this.relief = strength;
+    this.litMat.normalScale.set(strength, -strength);
+    if (this.floorDetail) this.floorDetail.uniforms.floorRelief.value = strength;
+    this.dirty = true;
+  }
+
+  /** Assign a reviewed material layer to this atlas. A failed or stale asynchronous load cannot replace it. */
+  async setFloorDetail(spec?: FloorDetailSpec, expectedPaintHash?: string) {
+    const request = ++this.floorDetailRequest;
+    const revision = this.engine.atlas.revision;
+    let paintHash: string | undefined;
+    if (spec) {
+      const pixels = this.engine.atlas.readBytes(undefined, this.engine.atlas.size, true).data;
+      const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(pixels));
+      paintHash = [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, '0')).join('');
+      if (expectedPaintHash && paintHash !== expectedPaintHash)
+        throw new Error('Floor detail: preservation mask belongs to another painting or atlas resolution');
+    }
+    const detail = spec ? await loadFloorDetail(spec, this.engine.level, this.engine.atlas.size,
+      Math.min(8, this.engine.gpu.renderer.capabilities.getMaxAnisotropy())) : undefined;
+    if (request !== this.floorDetailRequest || this.disposed || revision !== this.engine.atlas.revision) {
+      detail?.dispose();
+      if (request === this.floorDetailRequest && !this.disposed) throw new Error('Paint changed while the floor material was loading');
+      return;
+    }
+    this.removeFloorDetail?.(); this.removeFloorDetail = undefined;
+    this.floorDetail?.dispose(); this.floorDetail = detail;
+    this.floorDetailRevision = revision;
+    this.floorDetailPaintHash = paintHash;
+    if (detail) {
+      detail.setResponse(MATERIAL_PRESETS[this.engine.materialPresets[detail.spec.label]]);
+      detail.uniforms.floorRelief.value = this.relief;
+      this.removeFloorDetail = installFloorDetail(this.litMat, detail);
+    }
+    this.dirty = true;
+  }
+
+  get floorDetailState() {
+    const d = this.floorDetail, stale = !!d && this.engine.atlas.revision !== this.floorDetailRevision;
+    return { available: !!d, enabled: !!d?.enabled && !stale, stale, label: d?.spec.label,
+      textureBytes: d?.textureBytes ?? 0 };
+  }
+
+  /** Portable run metadata; stale masks are never saved as usable material layers. */
+  get floorDetailSettings() {
+    const d = this.floorDetail;
+    if (!d || this.floorDetailState.stale) return undefined;
+    const portable = (url: string) => {
+      const absolute = new URL(url, location.href);
+      return absolute.origin === location.origin ? absolute.pathname + absolute.search : absolute.href;
+    };
+    return { spec: { ...d.spec, packedUrl: portable(d.spec.packedUrl), protectUrl: portable(d.spec.protectUrl),
+      statisticsUrl: portable(d.spec.statisticsUrl) }, enabled: d.enabled, paintHash: this.floorDetailPaintHash };
+  }
+
+  setFloorDetailEnabled(enabled: boolean) {
+    if (enabled && this.floorDetailState.stale) throw new Error('Floor detail is paused because the paint changed; load a newly reviewed mask first');
+    if (this.floorDetail) this.floorDetail.enabled = enabled;
+    this.dirty = true;
+  }
+
+  syncMaterialResponses() {
+    if (this.floorDetail) this.floorDetail.setResponse(MATERIAL_PRESETS[this.engine.materialPresets[this.floorDetail.spec.label]]);
+    this.dirty = true;
+  }
+
+  /** Read-only validation views; normal display is 'off'. */
+  setFloorDetailDebug(mode: 'off' | 'albedo' | 'protected') {
+    if (this.floorDetail) this.floorDetail.uniforms.floorDebug.value = { off: 0, albedo: 1, protected: 2 }[mode];
+    this.dirty = true;
+  }
+
   /** Pink markers for player points and planned cameras. */
   showPlan(points: THREE.Vector3[], views: ViewSpec[], scale = 0.9, color: THREE.ColorRepresentation = PINK) {
     this.clearOverlay();
@@ -227,6 +371,58 @@ export class Viewer {
     this.dirty = true;
   }
 
+  /**
+   * Walk the level in first person from `eye` (a player's eye position, e.g. one of the plan's points). WASD or the
+   * arrows move, Shift runs, Space jumps, the mouse looks; `onExit` runs when the walk ends (Esc).
+   */
+  startWalk(eye: THREE.Vector3, yaw = 0, onExit?: () => void) {
+    this.stopWalk();
+    const { level } = this.engine;
+    this.orbitPose = { position: this.camera.position.clone(), target: this.controls.target.clone(), fov: this.camera.fov };
+    this.walker = new Walker(level.bvh, level.bounds);
+    this.walker.place(new THREE.Vector3(eye.x, eye.y - this.walker.options.eyeHeight, eye.z), yaw);
+    this.controls.enabled = false;
+    this.walkControls = new WalkControls(this.walker, this.dom, () => { this.stopWalk(); onExit?.(); });
+    this.camera.fov = 75;
+    this.camera.updateProjectionMatrix();
+    this.walker.applyTo(this.camera);
+    this.dirty = true;
+    return this.walker;
+  }
+
+  stopWalk() {
+    if (!this.walker) return;
+    this.walkControls?.dispose();
+    this.walkControls = undefined;
+    this.walker = undefined;
+    this.controls.enabled = true;
+    if (this.orbitPose) {
+      this.camera.position.copy(this.orbitPose.position);
+      this.controls.target.copy(this.orbitPose.target);
+      this.camera.fov = this.orbitPose.fov;
+      this.camera.updateProjectionMatrix();
+      this.controls.update();
+    }
+    this.dirty = true;
+  }
+
+  /** Per-frame update: moves the walker (if any). `dt` in seconds. */
+  tick(dt: number) {
+    if (!this.walker) return;
+    this.walker.step(dt);
+    this.walker.applyTo(this.camera);
+    this.dirty = true;
+  }
+
+  dispose() {
+    this.disposed = true; this.floorDetailRequest++;
+    this.removeFloorDetail?.(); this.floorDetail?.dispose(); this.floorDetail = undefined;
+    this.stopWalk();
+    this.setPbr(undefined);
+    this.setAo(undefined);
+    this.controls.dispose();
+  }
+
   goTo(spec: ViewSpec) {
     const cam = makeCamera(spec);
     this.camera.position.copy(cam.position);
@@ -243,6 +439,8 @@ export class Viewer {
   }
 
   render(camera: THREE.Camera = this.camera) {
+    if (this.floorDetail) this.floorDetail.uniforms.floorEnabled.value =
+      this.floorDetailState.enabled && this.texMaterial.uniforms.useBefore.value < .5 ? 1 : 0;
     const r = this.engine.gpu.renderer;
     r.setRenderTarget(null);
     r.toneMapping = THREE.NeutralToneMapping;

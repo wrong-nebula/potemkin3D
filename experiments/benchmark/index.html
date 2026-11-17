@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>Trompe — shared-scene comparison</title><link rel="stylesheet" href="./style.css"></head>
+<body>
+<header><a class="brand" href="/">Trompe <span>/ comparison</span></a><a href="./README.md">Method & reproduction</a></header>
+<main>
+<div class="intro"><div><h1>A desert courtyard. Two methods.</h1><p>The same geometry, cameras and input images. Inspect the textures, then check what the numbers actually measure.</p></div><div id="run-state" role="status">Loading results…</div></div>
+<div class="controls">
+<label>Comparison<select id="dataset"><option>Loading…</option></select></label>
+<label>Camera<select id="camera"></select></label>
+<label>Display<select id="display"><option value="image">Appearance</option><option value="overlay">Observed / inferred</option><option value="heldout">Held-out reconstruction</option></select></label>
+<div class="layout-controls" aria-label="Comparison layout"><button id="side" aria-pressed="true">Side by side</button><button id="wipe" aria-pressed="false">Wipe</button><button id="orbit" aria-pressed="false">Explore 3D</button></div>
+</div>
+<div id="message" role="alert" hidden></div>
+<section class="stage" id="stage" aria-label="Matched camera comparison">
+<figure class="pane" id="left"><figcaption>Trompe <span>GPU projection</span></figcaption><img id="left-image" alt="Trompe texture from the selected camera"></figure>
+<figure class="pane" id="right"><figcaption>multiview-to-real <span>Strict fusion</span></figcaption><img id="right-image" alt="multiview-to-real texture from the same camera"></figure>
+<canvas id="orbit-canvas" aria-label="Synchronized interactive 3D comparison" hidden></canvas>
+<div id="image-loading" role="status">Preparing comparison…</div>
+</section>
+<div class="stage-footer"><p id="caption">Both views use the same camera and unlit display.</p><label id="wipe-control" hidden>Boundary<input id="boundary" type="range" min="0" max="100" value="50" aria-label="Wipe boundary"></label><p id="legend" hidden><i class="observed"></i>Observed <i class="inferred"></i>Inferred / soft <i class="missing"></i>Missing</p></div>
+<div class="evidence">
+<section><h2>Measured on this scene</h2><p id="metric-note">Coverage and error are separate measurements.</p><div class="table-scroll"><table><thead><tr><th scope="col">Measurement</th><th scope="col">Trompe</th><th scope="col">multiview-to-real</th></tr></thead><tbody id="metrics"></tbody></table></div><p class="footnote" id="support"></p></section>
+<section class="method"><h2>Read the result correctly</h2><p id="comparison-note"></p><ul id="limitations"></ul><a id="download" href="#" download>Download the full JSON report</a><details><summary>Configuration and provenance</summary><pre id="provenance"></pre></details></section>
+</div>
+<section class="parts"><h2>Coverage by surface</h2><p>Visible pixels from this camera. Filled color does not count as an observation.</p><div class="table-scroll"><table><thead><tr><th scope="col">Surface</th><th scope="col">Trompe</th><th scope="col">multiview-to-real</th></tr></thead><tbody id="parts"></tbody></table></div></section>
+</main>
+<footer>One scene, one sample per view. No universal winner is implied. <a href="https://github.com/gokayfem/multiview-to-real">Upstream implementation</a></footer>
+<script type="module" src="./view.js"></script>
+</body></html>

@@ -1,3 +1,4 @@
+/* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 /**
  * What a view shows, in words, for the prompt: which labelled parts of the level are in the area to paint and
  * roughly where, plus which pixels are roofs. Image models invent less when told what the gray shapes are.
@@ -18,8 +19,13 @@ export interface ViewDescription {
   floorShare: number;
 }
 
-/** Labels that name roofs; null when the level has none (then roofs are found by slope and height). */
-export function roofLabels(labels: string[]): boolean[] | null {
+/**
+ * Labels that name roofs; null when the level has none (then roofs are found by slope and height).
+ * @param fromFile false when the labels are names given to the level's shapes: a shape is a whole house, roof and
+ *   all, so its name says nothing about which of its faces are roof
+ */
+export function roofLabels(labels: string[], fromFile = true): boolean[] | null {
+  if (!fromFile) return null;
   const r = labels.map((l) => /\broofs?\b/.test(l));
   return r.some(Boolean) ? r : null;
 }
@@ -34,9 +40,9 @@ export const looksLikeRoof = (ny: number, y: number, groundY: number) => ny > 0.
  * @param nrm RGBA float per pixel: world normal xyz, a = label + 1 (0 = sky), top-down
  * @param pos RGBA float per pixel: world position xyz, top-down
  */
-export function classifyView(nrm: Float32Array, pos: Float32Array, labels: string[], groundY: number): ViewClasses {
+export function classifyView(nrm: Float32Array, pos: Float32Array, labels: string[], groundY: number, fromFile = true): ViewClasses {
   const n = nrm.length / 4;
-  const roofOf = roofLabels(labels);
+  const roofOf = roofLabels(labels, fromFile);
   const label = new Int16Array(n).fill(-1);
   const roof = new Uint8Array(n);
   const floor = new Uint8Array(n);
@@ -58,8 +64,17 @@ const where = (cx: number, cy: number) => {
   return v ? (h === 'center' ? v : `${v} ${h}`) : h;
 };
 
-/** Parts inside `area` (all geometry when undefined), biggest first, with rough positions in the frame. */
-export function describeView(c: ViewClasses, labels: string[], size: number, area?: Uint8Array): ViewDescription {
+/** A name that already says the part is something to walk on. */
+const WALKED_ON = /\b(ground|floor|paving|pavement|street|road|path|courtyard|terrace|steps?|stairs?|ramp)\b/;
+
+/**
+ * Parts inside `area` (all geometry when undefined), biggest first, with rough positions in the frame.
+ * @param shells labels that are a whole room or building in one shape: their up-facing pixels are called floor
+ *   rather than by the shape's name (a hall named "plaster wall" still has a floor)
+ */
+export function describeView(c: ViewClasses, labels: string[], size: number, area?: Uint8Array, shells?: boolean[]): ViewDescription {
+  const floorOf = shells && shells.some(Boolean) ? labels.length : -1;   // an extra entry collecting shell floors
+  if (floorOf >= 0) labels = [...labels, 'floor'];
   const count = new Float64Array(labels.length);
   const sx = new Float64Array(labels.length);
   const sy = new Float64Array(labels.length);
@@ -71,18 +86,27 @@ export function describeView(c: ViewClasses, labels: string[], size: number, are
     roofs += c.roof[i];
     floors += c.floor[i];
     if (k < labels.length) {
-      count[k]++;
-      sx[k] += (i % size) / size;
-      sy[k] += Math.floor(i / size) / size;
+      const to = floorOf >= 0 && shells![k] && c.floor[i] && !WALKED_ON.test(labels[k]) ? floorOf : k;
+      count[to]++;
+      sx[to] += (i % size) / size;
+      sy[to] += Math.floor(i / size) / size;
     }
   }
-  const named = labels.length > 1;
-  const parts = !named ? '' : labels
-    .map((name, k) => ({ name, share: total ? count[k] / total : 0, cx: sx[k] / Math.max(1, count[k]), cy: sy[k] / Math.max(1, count[k]) }))
-    .filter((p) => p.share >= 0.015)
+  // Parts without a name say nothing; parts that share a name and a place in the frame are one entry.
+  const seen = new Map<string, { name: string; share: number; place: string }>();
+  for (let k = 0; k < labels.length; k++) {
+    if (!labels[k] || !count[k] || labels.length < 2) continue;
+    const place = where(sx[k] / count[k], sy[k] / count[k]);
+    const key = `${labels[k]}|${place}`;
+    const e = seen.get(key) ?? { name: labels[k], share: 0, place };
+    e.share += total ? count[k] / total : 0;
+    seen.set(key, e);
+  }
+  const parts = [...seen.values()]
+    .filter((p) => p.share >= 0.004)   // down to what the blockout check looks at: a small prop left unnamed gets painted away
     .sort((a, b) => b.share - a.share)
     .slice(0, 8)
-    .map((p) => `${p.name} (${p.share > 0.4 ? 'most of the frame' : where(p.cx, p.cy)}${p.share < 0.04 ? ', small' : ''})`)
+    .map((p) => `${p.name} (${p.share > 0.4 ? 'most of the frame' : p.place}${p.share < 0.04 ? ', small' : ''})`)
     .join(', ');
   return { parts, roofShare: total ? roofs / total : 0, floorShare: total ? floors / total : 0 };
 }
