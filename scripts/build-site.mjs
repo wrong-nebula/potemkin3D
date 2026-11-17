@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Build the walk-through of one painted run as a static site (for Vercel or any file host):
+// Build the walk-through of one painted run as a static site for any static file host:
 //   node scripts/build-site.mjs --run loft-props [--out deploy/potemkin3d] [--title "Potemkin 3D"]
 // The site holds the page, its script (three.js bundled in), and the run's level files with the texture at 8192 px
 // and 4096 px (made with the bake step: level_8k.glb, level_4k.glb), plus the little of run.json the page reads.
