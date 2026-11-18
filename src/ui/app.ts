@@ -132,6 +132,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
     ['light', 'Weights · Static light'],
     ['class', 'Weights · Semantic class'],
     ['importance', 'Weights · Combined importance'],
+    ['paths', 'Weights · Player-path bot gaze'],
   ]) weightsSel.append(h('option', { value: v }, l));
   const camsBox = h('input', { type: 'checkbox', checked: '' });
   const walkBtn = h('button', {}, 'Walk the level');
@@ -225,10 +226,11 @@ export function mountUi(session: Session, panel: HTMLElement) {
   litBtn.onclick = () => setMode('lit');
   weightsSel.onchange = () => {
     try {
-      const r = session.setWeightOverlay(weightsSel.value as 'off' | 'openness' | 'curvature' | 'light' | 'class' | 'importance');
+      const r = session.setWeightOverlay(weightsSel.value as 'off' | 'openness' | 'curvature' | 'light' | 'class' | 'importance' | 'paths');
       if (r.overlay !== 'off') {
         const cls = Object.entries(r.classes).filter(([, s]) => s >= 0.01).map(([k, s]) => `${k} ${Math.round(100 * s)}%`).join(', ');
-        say(`weights (${r.overlay}, ${r.seconds}s): mean openness ${r.mean.openness}, curvature ${r.mean.curvature}, light ${r.mean.light}, importance ${r.mean.importance} · ${cls}`);
+        const pInfo = 'paths' in r && r.paths ? ` · bots: ${r.paths.nodes} nav nodes, ${r.paths.poses} poses, ${Math.round(100 * r.paths.highRankShare)}% high-rank` : '';
+        say(`weights (${r.overlay}, ${r.seconds}s): mean openness ${r.mean.openness}, curvature ${r.mean.curvature}, light ${r.mean.light}, importance ${r.mean.importance} · ${cls}${pInfo}`);
       }
     } catch (e) { say(String((e as Error)?.message ?? e)); }
   };

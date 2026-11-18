@@ -8,6 +8,7 @@
 //     [--unwrap auto|always|off] UVs from scratch (xatlas) when the file's can't hold a painting (default auto)
 //     [--cavity 0.7] with --layout seen|near: enclosed islands (creases, recesses) drawn smaller, down to that scale
 //     [--weights]    geometry prepasses (openness, convex curvature, light, semantic class) weighting layout and camera planning
+//     [--paths]      walkable nav-graph + simulated bot gaze importance map weighting layout, camera planning and repairs
 //     [--adaptive]   iterative importance-driven camera planning (geodesic + surface weights + Fisher detail + adaptive lenses)
 //     [--mode auto|level|object] [--focus barrel,face]  discrete prop/character/vehicle mode (enclosing sphere + close-ups)
 //     [--consolidate] confidence-weighted tangent-flow + Screened-Poisson atlas stitch to remove --parallel view seams (free)
@@ -78,6 +79,7 @@ const { values: a } = parseArgs({
     area: { type: 'string' },     // 'x0,y0,z0,x1,y1,z1': where players can be, when the level has more floor than that
     cavity: { type: 'string' },   // with --layout seen or near: draw enclosed islands (creases, slots, recesses) smaller, down to this scale (e.g. 0.7)
     weights: { type: 'boolean', default: false },   // run all four geometry prepasses (openness, convex curvature, static light, semantic class) for layout and planning
+    paths: { type: 'boolean', default: false },     // bake a walkable nav-graph and walk simulated bots to weight UV packing, planning and repairs by player gaze
     unwrap: { type: 'string' },   // 'auto' (default): make UVs from scratch (xatlas) when the file's are missing, collapsed, tiling or overlapping; 'always'; 'off': the file's own, as they are
     layout: { type: 'string' },   // 'seen': lay the texture out by what players can see; 'near': join faces into strips and size each island by how near players get; 'file' (default): the level's own UVs
     'view-size': { type: 'string' },   // 2048 (default), or 1024: a quarter of the pixels, quicker, FLUX 3 Klein charges $0.009 instead of $0.014
@@ -152,6 +154,11 @@ if (!given('weights') && a.resume) {
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8'));
   if (saved.layout?.weights || saved.weights) a.weights = true;
 }
+if (!given('paths') && a.resume) {
+  const fs = await import('node:fs');
+  const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8'));
+  if (saved.layout?.paths || saved.paths) a.paths = true;
+}
 if (!given('mode') && a.resume) {
   const fs = await import('node:fs');
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8'));
@@ -186,8 +193,8 @@ try {
       else log(JSON.stringify(e));
     },
   });
-  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap, cavity, weights, mode]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity: +cavity, weights, mode }),
-    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap, a.cavity ?? '0', !!a.weights, a.mode]);
+  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap, cavity, weights, mode, paths]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity: +cavity, weights, mode, paths }),
+    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap, a.cavity ?? '0', !!a.weights, a.mode, !!a.paths]);
   log(`level: ${JSON.stringify(info)}`);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) {
     log(`projection: ${JSON.stringify(await page.evaluate((o) => window.trompe.projection(o),

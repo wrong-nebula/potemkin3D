@@ -31,7 +31,8 @@ import { makeCamera, lookAt } from './core/views';
 import { resizeRGBA } from './core/image';
 import { loadLevel, setTriangles, type Level } from './core/scene';
 import { objectEyes } from './core/object-plan';
-import { cavityScale, faceOpenness, suggestPresetsFromWeights, surfaceWeights, weightScale, writeWeightAttribute, type SurfaceWeights } from './core/surface-weights';
+import { pathLayoutScale, playerImportance, rankTier, splitUvByRank, type PlayerImportance } from './core/player-paths';
+import { cavityScale, cellWeights, faceOpenness, suggestPresetsFromWeights, surfaceWeights, weightScale, writeWeightAttribute, type SurfaceWeights } from './core/surface-weights';
 import { unwrap as unwrapUVs, uvHealth, type UvHealth } from './core/unwrap';
 import { browserXatlas } from './core/xatlas-browser';
 import { MODELS, PART_MODEL } from './providers/models';
@@ -80,10 +81,12 @@ export class Session {
    *   (with 'seen' or 'near') weight island packing and keep same-class islands together
    * @param mode 'level': walkable ground cameras; 'object': discrete prop/weapon/character/vehicle (enclosing sphere);
    *   'auto' (default): 'object' when the mesh has no walkable player floor or is under 4.5 m across, else 'level'
+   * @param paths bake a walkable nav-graph, walk simulated bots and accumulate gaze rays (`playerImportance`,
+   *   core/player-paths.ts) to weight UV island packing, camera planning and repair priority
    */
   async load(source: string | ArrayBuffer, name: string, lighting: Lighting = OUTDOOR, atlasSize = 4096, viewSize = 2048,
     layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1, unwrap: 'auto' | 'always' | 'off' = 'auto', cavity = 0, weights = false,
-    mode: 'auto' | 'level' | 'object' = 'auto') {
+    mode: 'auto' | 'level' | 'object' = 'auto', paths = false) {
     if (cavity && !(cavity > 0 && cavity < 1)) throw new Error(`cavity is the smallest scale for an enclosed island, between 0 and 1, not ${cavity}`);
     if (cavity && layout === 'file') throw new Error("cavity needs a layout that is packed again: 'seen' or 'near'");
     this.viewer?.dispose();
@@ -122,11 +125,25 @@ export class Session {
     this.level.mode = resolvedMode;
     const layoutEyes = resolvedMode === 'object' ? objectEyes(this.level, 48) : walkEyes;
     const minScale = cavity || 0.7;
+    const pp = paths ? playerImportance(this.level) : undefined;
+    if (pp) {
+      this.level.playerPaths = pp;
+      this.level.paths = { nodes: pp.nodes, poses: pp.poses, seenShare: pp.seenShare, highRankShare: pp.highRankShare, seconds: pp.seconds };
+    }
     const sw = weights ? surfaceWeights(this.level, lighting, { minScale }) : undefined;
     if (sw) {
+      if (pp) sw.paths = pp.rank;
       this.level.surfaceWeights = sw;
       this.level.weights = { seconds: sw.seconds, classes: sw.classes, mean: sw.mean };
-      writeWeightAttribute(this.level.geometry, sw.importance);
+    }
+    if (sw || pp) {
+      const tris = this.level.triangles;
+      const combined = new Float32Array(tris);
+      for (let t = 0; t < tris; t++) {
+        const pw = pp ? (pp.rank[t] > 0 ? 0.15 + 1.65 * pp.rank[t] : 0.04) : 1;
+        combined[t] = (sw ? sw.importance[t] : 1) * pw;
+      }
+      writeWeightAttribute(this.level.geometry, combined);
     }
     if (layout === 'seen') {
       const t0 = performance.now();
@@ -134,13 +151,20 @@ export class Session {
       const eyes = layoutEyes;
       const position = g.getAttribute('position').array, uv = g.getAttribute('uv').array;
       const cav = !sw && cavity ? this.cavityWeights(uv, cavity) : undefined;
-      if (cav) writeWeightAttribute(g, cav.weight);
-      const packW = sw ? weightScale(position, uv, sw, { minScale }) : cav?.weight;
-      const l = seenLayout(position, uv, eyes.length ? seenTriangles(position, level.bvh, eyes) : new Uint8Array(position.length / 9).fill(1),
-        packW ? { weight: packW, minGain: 0 } : {});
+      if (cav && !pp) writeWeightAttribute(g, cav.weight);
+      let packW: Float32Array | undefined = sw ? weightScale(position, uv, sw, { minScale }) : cav?.weight;
+      if (pp) {
+        const pw = pathLayoutScale(position, uv, pp.rank);
+        packW = packW ? Float32Array.from(packW, (x, i) => x * pw[i]) : pw;
+      }
+      const seenMask = pp
+        ? Uint8Array.from(pp.rank, (r) => (r > 0 ? 1 : 0))
+        : eyes.length ? seenTriangles(position, level.bvh, eyes) : new Uint8Array(position.length / 9).fill(1);
+      const l = seenLayout(position, uv, seenMask, packW ? { weight: packW, minGain: 0 } : {});
       if (l.applied) g.setAttribute('uv', new THREE.Float32BufferAttribute(l.uv, 2));
       level.layout = { applied: l.applied, gain: l.gain, seenSurface: l.seenSurface, seenTexture: l.seenTexture, islands: l.islands,
-        hash: layoutHash(l.uv), seconds: (performance.now() - t0) / 1000, ...(cav ? { cavity: cav.info } : {}), ...(sw ? { weights: level.weights } : {}) };
+        hash: layoutHash(l.uv), seconds: (performance.now() - t0) / 1000,
+        ...(cav ? { cavity: cav.info } : {}), ...(sw ? { weights: level.weights } : {}), ...(pp ? { paths: level.paths } : {}) };
     }
     const grid = Math.round(Math.sqrt(pages));
     if (grid * grid !== pages || grid > 4) throw new Error(`a level is painted over 1, 4 or 16 textures, not ${pages}`);
@@ -150,20 +174,26 @@ export class Session {
       const eyes = layoutEyes;
       const position = g.getAttribute('position').array, uv = g.getAttribute('uv').array, label = g.getAttribute('label').array;
       const part = new Int32Array(position.length / 9);
-      for (let t = 0; t < part.length; t++) part[t] = label[3 * t];
+      for (let t = 0; t < part.length; t++) part[t] = pp ? Math.round(label[3 * t]) * 4 + rankTier(pp.rank[t]) : label[3 * t];
       // with nowhere for a player to stand, every face counts as within reach
-      const dist = eyes.length ? seenDistance(position, level.bvh, eyes) : new Float32Array(part.length).fill(1);
+      const rawDist = eyes.length ? seenDistance(position, level.bvh, eyes) : new Float32Array(part.length).fill(1);
+      const dist = pp ? Float32Array.from(rawDist, (d, t) => (pp.rank[t] > 0 ? Math.min(d, pp.minDist[t]) : Infinity)) : rawDist;
       const share = seenShare(position, uv, dist);
       const strips = stripLayout(position, uv, part);
-      const cav = !sw && cavity ? this.cavityWeights(strips.uv, cavity) : undefined;
-      if (cav) writeWeightAttribute(g, cav.weight);
-      const packW = sw ? weightScale(position, strips.uv, sw, { minScale }) : cav?.weight;
-      const sized = nearScaled(position, strips.uv, dist, packW ? { weight: packW } : {});
+      const baseUv = pp ? splitUvByRank(position, strips.uv, pp.rank) : strips.uv;
+      const cav = !sw && cavity ? this.cavityWeights(baseUv, cavity) : undefined;
+      if (cav && !pp) writeWeightAttribute(g, cav.weight);
+      let packW: Float32Array | undefined = sw ? weightScale(position, baseUv, sw, { minScale }) : cav?.weight;
+      if (pp) {
+        const pw = pathLayoutScale(position, baseUv, pp.rank);
+        packW = packW ? Float32Array.from(packW, (x, i) => x * pw[i]) : pw;
+      }
+      const sized = nearScaled(position, baseUv, dist, packW ? { weight: packW } : {});
       const l = this.packOverPages(sized.uv, grid, sw?.faceClass);
       const hash = layoutHash(l.uv), seconds = (performance.now() - t0) / 1000;
       level.layout = { kind: 'near', applied: true, gain: l.gain, seenSurface: share.surface, seenTexture: share.texture, islands: l.islands, hash, seconds,
         strips: strips.strips, joined: strips.joined, before: strips.before, full: sized.full, cut: l.cut, pieces: l.pieces,
-        ...(cav ? { cavity: cav.info } : {}), ...(sw ? { weights: level.weights } : {}) };
+        ...(cav ? { cavity: cav.info } : {}), ...(sw ? { weights: level.weights } : {}), ...(pp ? { paths: level.paths } : {}) };
       if (grid > 1) level.pages = { grid, gain: l.gain, islands: l.islands, fill: l.fill, cut: l.cut, pieces: l.pieces, hash, seconds };
     } else if (pages > 1) {
       const t0 = performance.now();
@@ -177,8 +207,21 @@ export class Session {
     return { triangles: this.level.triangles, area: Math.round(this.level.surfaceArea), mode: this.level.mode,
       ...(uvHealthInfo ? { uvHealth: uvHealthInfo } : {}), ...(this.level.unwrap ? { unwrap: this.level.unwrap } : {}),
       ...(this.level.weights ? { weights: this.level.weights } : {}),
+      ...(this.level.paths ? { paths: this.level.paths } : {}),
       ...(this.level.layout ? { layout: this.level.layout } : {}),
       ...(this.level.pages ? { pages: { ...this.level.pages, size: atlasSize } } : {}) };
+  }
+
+  /** Compute (once per triangle set) and return the simulated player-path importance map for the loaded level. */
+  ensurePaths(): PlayerImportance {
+    const level = this.level;
+    if (!level) throw new Error('load a level first');
+    if (!level.playerPaths || level.playerPaths.rank.length !== level.triangles) {
+      const pp = playerImportance(level);
+      level.playerPaths = pp;
+      level.paths ??= { nodes: pp.nodes, poses: pp.poses, seenShare: pp.seenShare, highRankShare: pp.highRankShare, seconds: pp.seconds };
+    }
+    return level.playerPaths;
   }
 
   /** Compute (once per triangle set) and return the four geometry prepasses for the loaded level. */
@@ -187,12 +230,13 @@ export class Session {
     if (!level) throw new Error('load a level first');
     if (!level.surfaceWeights || level.surfaceWeights.importance.length !== level.triangles) {
       level.surfaceWeights = surfaceWeights(level, this.engine?.clay.lighting ?? OUTDOOR, { minScale: level.layout?.cavity?.minScale ?? 0.65 });
+      if (level.playerPaths && level.playerPaths.rank.length === level.triangles) level.surfaceWeights.paths = level.playerPaths.rank;
       if (!level.geometry.getAttribute('weight')) writeWeightAttribute(level.geometry, level.surfaceWeights.importance);
     }
     return level.surfaceWeights;
   }
 
-  /** Show a per-face geometry weight or semantic class map as false colour in the viewer, or 'off' to restore display. */
+  /** Show a per-face geometry weight, player-path rank or semantic class map as false colour in the viewer, or 'off' to restore display. */
   setWeightOverlay(overlay: WeightOverlay) {
     if (!this.viewer || !this.level) throw new Error('load a level first');
     if (overlay === 'off') {
@@ -200,8 +244,12 @@ export class Session {
       return { overlay: 'off' as const };
     }
     const sw = this.ensureWeights();
+    if (overlay === 'paths' && (!sw.paths || sw.paths.length !== this.level.triangles)) {
+      sw.paths = this.ensurePaths().rank;
+    }
     this.viewer.setWeightOverlay(overlay, sw);
-    return { overlay, seconds: sw.seconds, classes: sw.classes, mean: sw.mean };
+    return { overlay, seconds: sw.seconds, classes: sw.classes, mean: sw.mean,
+      ...(this.level.playerPaths ? { paths: { nodes: this.level.playerPaths.nodes, poses: this.level.playerPaths.poses, seenShare: this.level.playerPaths.seenShare, highRankShare: this.level.playerPaths.highRankShare } } : {}) };
   }
 
   /** Suggest material presets using part names plus semantic face classes. */
@@ -1132,7 +1180,9 @@ export class Session {
     const e = this.engine!, level = this.level!;
     const V = 512;
     const cells = e.atlas.texelGeometry(V), quality = e.atlas.cellQuality(V);
-    const seen = seenCells(cells.pos, cells.nrm, level.bvh, samplePlayerPoints(level, { ...DEFAULT_PLAN, spacing: 1.5 }));
+    const seen = level.paths
+      ? cellWeights(level.geometry.getAttribute('uv').array, this.ensurePaths().rank, V).map((r) => (r > 0 ? 1 : 0))
+      : seenCells(cells.pos, cells.nrm, level.bvh, samplePlayerPoints(level, { ...DEFAULT_PLAN, spacing: 1.5 }));
     const stats: PartStats[] = level.labels.map((_, label) => ({ label, seen: 0, unpainted: 0, area: 0, triangles: 0 }));
     for (let i = 0; i < V * V; i++) {
       if (!seen[i]) continue;
@@ -1296,9 +1346,11 @@ export class Session {
       ...(this.level?.playArea ? { area: [...this.level.playArea.min.toArray(), ...this.level.playArea.max.toArray(), ...(this.level.spots ?? []).flatMap((p) => p.toArray())] } : {}),
       ...(this.level?.unwrap ? { unwrap: { hash: this.level.unwrap.hash, reason: this.level.unwrap.reason } } : {}),
       ...(this.level?.weights && !this.level?.layout?.applied ? { weights: true } : {}),
+      ...(this.level?.paths && !this.level?.layout?.applied ? { paths: true } : {}),
       ...(this.level?.layout?.applied ? { layout: { kind: this.level.layout.kind ?? 'seen', hash: this.level.layout.hash, gain: this.level.layout.gain,
         ...(this.level.layout.cavity ? { cavity: this.level.layout.cavity.minScale } : {}),
-        ...(this.level.layout.weights ? { weights: true } : {}) } } : {}),
+        ...(this.level.layout.weights ? { weights: true } : {}),
+        ...(this.level.layout.paths ? { paths: true } : {}) } } : {}),
       ...(this.level?.pages ? { pages: { count: this.engine!.atlas.pageCount, size: this.engine!.atlas.pageSize, hash: this.level.pages.hash, gain: this.level.pages.gain } } : {}),
       ...(this.engine!.ao ? { ao: { size: this.engine!.ao.size, rays: this.engine!.ao.rays, radius: this.engine!.ao.radius } } : {}),
       plan: { points: r.plan.points.map((p) => p.toArray()), views: r.plan.views, waves: r.plan.waves, predicted: r.plan.predicted },

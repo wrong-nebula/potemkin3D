@@ -10,6 +10,7 @@ import { configureFal } from './providers/fal';
 import { DEFAULT_PLAN, plan as makePlan, planStats, samplePlayerPoints } from './core/planner';
 import { objectEyes } from './core/object-plan';
 import { seenCells } from './core/layout';
+import { cellWeights } from './core/surface-weights';
 import { PAINTED } from './core/atlas';
 import type { GroundOptions } from './core/ground';
 import type { Note } from './core/notes';
@@ -101,9 +102,14 @@ export function makeApi(session: Session) {
       return session.viewer.floorDetailState;
     },
     demo: new Demo(session),
-    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number; weights?: boolean; mode?: 'auto' | 'level' | 'object' } = {}) {
+    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number; weights?: boolean; mode?: 'auto' | 'level' | 'object'; paths?: boolean } = {}) {
       const name = opts.name ?? url.split('/').pop()!.replace(/\.\w+$/, '');
-      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0, !!opts.weights, opts.mode ?? 'auto');
+      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0, !!opts.weights, opts.mode ?? 'auto', !!opts.paths);
+    },
+    /** Bake a walkable nav-graph and simulate bot walks + gaze rays to rank triangles by player exposure (core/player-paths.ts). */
+    paths() {
+      const p = session.ensurePaths();
+      return { nodes: p.nodes, poses: p.poses, seenShare: p.seenShare, highRankShare: p.highRankShare, seconds: p.seconds };
     },
     /** Compute the four geometry prepasses (openness, convex curvature, static light, semantic class) and optionally display a false-colour debug overlay. */
     weights(overlay?: WeightOverlay) {
@@ -410,6 +416,20 @@ export function makeApi(session: Session) {
       // `atlas.a` carries `lens = 1 / tan(fov / 2)` per view (`1` at 90°), so multiplying by `S / 2` gives exact view pixels per metre across mixed lenses.
       const captured = e.atlas.cellQuality(G).map((q) => (q > PAINTED ? q : 0));
       const s = sampling(captured, pos, covered, G, e.atlas.size / G, S / 2);
+      const pp = session.ensurePaths();
+      const cellRank = cellWeights(e.level.geometry.getAttribute('uv').array, pp.rank, G);
+      const highMask = new Uint8Array(G * G);
+      let covCells = 0, highCells = 0, highPainted = 0;
+      for (let i = 0; i < covered.length; i++) {
+        if (!covered[i]) continue;
+        covCells++;
+        if (cellRank[i] >= 0.55) { highMask[i] = 1; highCells++; if (captured[i] > 0) highPainted++; }
+      }
+      const hr = sampling(captured, pos, covered, G, e.atlas.size / G, S / 2, highMask);
+      const highRank = highCells > 0
+        ? { share: covCells ? highCells / covCells : 0, painted: highCells ? highPainted / highCells : 0,
+          surface: hr.surface, surfaceMean: hr.surfaceMean, surface75: hr.surface75, texels: hr.texels }
+        : undefined;
       // what a player can see, from spots much denser than the cameras', and how much of that is painted
       const V = 256;
       const cells = e.atlas.texelGeometry(V), quality = e.atlas.cellQuality(V);
@@ -421,7 +441,9 @@ export function makeApi(session: Session) {
         island++;
         if (visible[i]) { seen++; if (quality[i] > PAINTED) painted++; else if (quality[i] > 0) filled++; }
       }
-      return { ...summarise(views, s, e.atlas.coverage(), record.cost), seen: { share: island ? seen / island : 0, painted: seen ? painted / seen : 0, filled: seen ? filled / seen : 0 } };
+      return { ...summarise(views, s, e.atlas.coverage(), record.cost),
+        seen: { share: island ? seen / island : 0, painted: seen ? painted / seen : 0, filled: seen ? filled / seen : 0 },
+        ...(highRank ? { highRank } : {}) };
     },
     async loadRun(id: string) {
       const meta = await session.loadRun(id);

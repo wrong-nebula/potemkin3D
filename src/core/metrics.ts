@@ -76,7 +76,7 @@ export interface Sampling {
  * @param pixelsPerMetre view pixels across one metre seen head-on from 1 m (half the view size over tan of half the lens angle)
  */
 export function sampling(quality: ArrayLike<number>, pos: ArrayLike<number>, covered: ArrayLike<number>, grid: number, texelsPerCell: number,
-  pixelsPerMetre: number): Sampling {
+  pixelsPerMetre: number, mask?: ArrayLike<number>): Sampling {
   const ratios: number[] = [];
   const onSurface: [number, number, number][] = [];   // detail and texels per metre, and the cell's area
   let all = 0;
@@ -84,6 +84,7 @@ export function sampling(quality: ArrayLike<number>, pos: ArrayLike<number>, cov
     for (let x = 0; x < grid - 1; x++) {
       const i = y * grid + x, j = i + 1;
       if (!covered[i] || !covered[j]) continue;
+      if (mask && !mask[i]) continue;
       const metres = Math.hypot(pos[4 * j] - pos[4 * i], pos[4 * j + 1] - pos[4 * i + 1], pos[4 * j + 2] - pos[4 * i + 2]);
       if (metres < 1e-4 || metres > 5) continue;   // two cells on different islands
       all++;
@@ -131,6 +132,8 @@ export interface RunMetrics {
    * it is painted. This, not the share of the whole texture painted, says how finished a level looks.
    */
   seen?: { share: number; painted: number; /** Share of it that no view painted and the finishing fill coloured. */ filled?: number };
+  /** Detail in pixels per metre on high-rank player sightlines (`playerImportance.rank >= 0.55`, core/player-paths.ts). */
+  highRank?: { share: number; painted: number; surface: number; surfaceMean: number; surface75: number; texels: number };
   views: ViewMetrics[];
   sampling: Sampling;
   /** Share of the texture's island texels that are painted. */

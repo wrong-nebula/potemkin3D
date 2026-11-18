@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH } from 'three-mesh-bvh';
 import { splitParts, type Part } from './parts';
+import type { PlayerImportance } from './player-paths';
 import type { SurfaceWeights, SurfaceWeightsSummary } from './surface-weights';
 
 /** A level flattened into one world-space mesh with a single UV set (TEXCOORD_0). */
@@ -48,6 +49,10 @@ export interface Level {
   weights?: SurfaceWeightsSummary;
   /** Whether the mesh is planned as a walkable architectural 'level' (default) or a standalone discrete 'object' (core/object-plan.ts). */
   mode?: 'level' | 'object';
+  /** Cached simulated player-path importance for the current triangles (core/player-paths.ts). */
+  playerPaths?: PlayerImportance;
+  /** Summary of simulated player-path importance when enabled on load (`paths: true`). */
+  paths?: { nodes: number; poses: number; seenShare: number; highRankShare: number; seconds: number };
 }
 
 export interface LevelUnwrap {
@@ -98,6 +103,8 @@ export interface LevelLayout {
   cavity?: { minScale: number; shrunkSurface: number; kept: number; seconds: number };
   /** Full geometry prepasses (openness, convex curvature, static light, semantic class) weighted the layout and planner. */
   weights?: SurfaceWeightsSummary;
+  /** Simulated bot paths and gaze rays (`playerImportance`) weighted island scaling and camera planning. */
+  paths?: { nodes: number; poses: number; seenShare: number; highRankShare: number; seconds: number };
   /** False when the weighted layout gained too little and the file's own was kept. */
   applied: boolean;
   /** How much denser the faces players see are than in the file's layout, along each axis. */
@@ -129,6 +136,7 @@ export function setTriangles(level: Level, t: { position: Float32Array; normal: 
   level.bvh = new MeshBVH(g);
   level.triangles = t.position.length / 9;
   level.surfaceWeights = undefined;
+  level.playerPaths = undefined;
   if (level.shapes) {
     for (const s of level.shapes) s.triangles = 0;
     for (let i = 0; i < t.label.length; i += 3) { const s = level.shapes[t.label[i]]; if (s) s.triangles++; }

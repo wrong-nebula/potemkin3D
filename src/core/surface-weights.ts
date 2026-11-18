@@ -465,6 +465,8 @@ export interface SurfaceWeights extends SurfaceWeightsSummary {
   faceClass: Uint8Array;
   /** Combined importance per triangle (around 1 on an open, lit wall; lower in dark recesses; higher on exposed convex features). */
   importance: Float32Array;
+  /** Optional simulated player-path gaze rank per triangle in `[0, 1]` (core/player-paths.ts). */
+  paths?: Float32Array;
 }
 
 const CLASS_IMPORTANCE = [1.0, 1.0, 0.85, 0.9, 1.1, 1.05];
@@ -640,7 +642,7 @@ export function suggestPresetsFromWeights(labels: string[], labelAttr: ArrayLike
   return out;
 }
 
-export type WeightOverlayKind = 'openness' | 'curvature' | 'light' | 'class' | 'importance';
+export type WeightOverlayKind = 'openness' | 'curvature' | 'light' | 'class' | 'importance' | 'paths';
 
 /** Semantic class palette (sRGB 0..1): floor, wall, ceiling, roof, organic, hard-surface. */
 const CLASS_COLOURS: [number, number, number][] = [
@@ -680,7 +682,9 @@ export function weightOverlayColors(kind: WeightOverlayKind, weights: SurfaceWei
       ? CLASS_COLOURS[weights.faceClass[t]] ?? CLASS_COLOURS[1]
       : kind === 'importance'
         ? ramp((weights.importance[t] - 0.45) / (1.35 - 0.45))
-        : ramp(weights[kind][t]);
+        : kind === 'paths'
+          ? ramp(weights.paths ? weights.paths[t] : 0)
+          : ramp(weights[kind][t]);
     const p = 9 * t;
     out[p] = out[p + 3] = out[p + 6] = r;
     out[p + 1] = out[p + 4] = out[p + 7] = g;

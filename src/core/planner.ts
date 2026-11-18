@@ -587,11 +587,11 @@ export function selectViews(lists: CellList[], o: PlanOptions, aerial: boolean[]
   let cellW: Float32Array | null = null;
   if (weights && reachable > 0) {
     let wSum = 0;
-    for (let c = 0; c < G2; c++) if (qBest[c] > 0) wSum += weights[c] > 0 ? weights[c] : 1;
+    for (let c = 0; c < G2; c++) if (qBest[c] > 0) wSum += weights[c] > 0 ? weights[c] : 0.05;
     if (wSum > 0) {
       cellW = new Float32Array(G2);
       const norm = reachable / wSum;
-      for (let c = 0; c < G2; c++) if (qBest[c] > 0) cellW[c] = (weights[c] > 0 ? weights[c] : 1) * norm;
+      for (let c = 0; c < G2; c++) if (qBest[c] > 0) cellW[c] = (weights[c] > 0 ? weights[c] : 0.05) * norm;
     }
   }
   const covered = new Uint8Array(G2);
@@ -761,7 +761,7 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
   // The floor pass: straight down over the ground, chosen over ground surfaces only and painted first.
   const floorCands = o.floors > 0 ? floorViews(level, o, points) : [];
   const floorLists = probeCells(gpu, views, floorCands, o, floorTest(points, o.eyeHeight));
-  const floorSel = floorCands.length ? selectViews(floorLists, { ...o, maxViews: o.floors, targetCoverage: 0.98, maxParallel: 1 }, [], existing) : null;
+  const floorSel = floorCands.length ? selectViews(floorLists, { ...o, maxViews: o.floors, targetCoverage: 0.98, maxParallel: 1 }, [], existing, undefined, undefined, weights) : null;
   const roofCands = o.roofs > 0 ? roofViews(level, o, 0) : [];
   const roofLists = probeCells(gpu, views, roofCands, o, roofTest(level));
   const air = o.aerial > 0 ? aerialViews(level, o, 0) : [];

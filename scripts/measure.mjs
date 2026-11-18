@@ -16,6 +16,7 @@ const { values: a } = parseArgs({
     layout: { type: 'string' },
     cavity: { type: 'string' },
     weights: { type: 'boolean', default: false },
+    paths: { type: 'boolean', default: false },
     mode: { type: 'string' },
     unwrap: { type: 'string' },
     'min-cos': { type: 'string' },     // replay with another grazing-angle cut-off
@@ -35,14 +36,15 @@ a['view-size'] ??= String(saved.viewSize ?? 1024);
 const layout = a.layout ?? saved.layout?.kind ?? 'file';
 const cavity = layout === 'file' ? 0 : +(a.cavity ?? (a.layout ? 0 : saved.layout?.cavity ?? 0));
 const weights = a.weights || (!a.layout && !!(saved.layout?.weights ?? saved.weights));
+const paths = a.paths || (!a.layout && !!(saved.layout?.paths ?? saved.paths));
 const mode = a.mode ?? saved.mode ?? 'auto';
 const unwrap = a.unwrap ?? (saved.unwrap?.reason === 'asked' ? 'always' : 'auto');
 const { server, url } = await startServer();
 const browser = await launchBrowser();
 try {
   const page = await openApp(browser, url, { onLog: () => {}, onEvent: () => {} });
-  await page.evaluate(([lvl, l, atlas, viewSize, layout, area, pages, unwrap, cavity, weights, mode]) => window.trompe.load(`/${lvl}`, { lighting: l, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity, weights, mode }),
-    [a.level, lighting, a.atlas, a['view-size'], layout, saved.area, pages, unwrap, cavity, weights, mode]);
+  await page.evaluate(([lvl, l, atlas, viewSize, layout, area, pages, unwrap, cavity, weights, mode, paths]) => window.trompe.load(`/${lvl}`, { lighting: l, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity, weights, mode, paths }),
+    [a.level, lighting, a.atlas, a['view-size'], layout, saved.area, pages, unwrap, cavity, weights, mode, paths]);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) await page.evaluate((o) => window.trompe.projection(o), { ...(a['min-cos'] ? { minCos: +a['min-cos'] } : {}), ...(a['edge-guard'] ? { edgeGuard: +a['edge-guard'] } : {}), ...(a['frame-margin'] ? { frameMargin: +a['frame-margin'] } : {}) });
   await page.evaluate((r) => window.trompe.loadRun(r), a.run);
   const m = await page.evaluate(() => window.trompe.measure());
@@ -67,6 +69,11 @@ try {
       `${(100 * s.full).toFixed(1)}% of it has a view pixel or more per texel`);
     console.log(`on the surface (layout: ${layout}, ${a.atlas} px texture): ${s.surface.toFixed(0)} px of detail per metre at the median of what's painted; ` +
       `(mean ${s.surfaceMean.toFixed(0)}, sharpest quarter from ${s.surface75.toFixed(0)}); the texture holds ${s.texels.toFixed(0)} texels per metre there`);
+    if (m.highRank && m.highRank.share > 0) {
+      const h = m.highRank;
+      console.log(`on high-rank sightlines (${pc(h.share, 0)} of texture, ${pc(h.painted, 0)} painted): ${h.surface.toFixed(0)} px/m median ` +
+        `(mean ${h.surfaceMean.toFixed(0)}, sharpest quarter from ${h.surface75.toFixed(0)}); ${h.texels.toFixed(0)} texels/m`);
+    }
   }
 } finally {
   await browser.close();

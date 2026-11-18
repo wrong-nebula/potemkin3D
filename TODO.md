@@ -14,7 +14,7 @@ Paper references in the source notes have not been checked yet (in particular "L
 - Feed the result straight into the existing `seenLayout` / `stripLayout` / `pagedLayout` path in `src/core/layout.ts`, so repacking, island cutting and multi-page atlases stay as they are.
 - Add per-part atlasing (group charts by part/material) and a per-region texel-density target (more on high curvature or close-up parts).
 - Levels with good UVs keep today's path unchanged.
-- Still open: per-region texel-density targets (wait for items 6 and 7, then weight charts before packing). Also seam placement that follows hand-authored seams.
+- Still open: seam placement that follows hand-authored seams (per-region texel-density chart weighting before packing is now handled by `--weights` and `--paths` from items 6 and 7).
 
 **Done when:** an un-UV'd GLB textures end to end through the CLI, and `measure.mjs` px/m on an unwrapped sample is within ~10% of its hand-unwrapped version. Add a test alongside `layout.test.ts` / `cut.test.ts`.
 
@@ -59,20 +59,15 @@ Paper references in the source notes have not been checked yet (in particular "L
 - **Material presets (`src/core/material-presets.ts`, `aligned-maps.ts`, `viewer.ts`, `export.ts`).** Added `hard-surface`, `metal` (writing glTF ORM metallic B and enabling metallic response in `Viewer` and GLB export), `fabric` and `organic`, wired into `suggestPresetsFromWeights` and the CLI/MCP schema.
 - **Verified end to end:** an un-UV'd 8-part rover/weapon/character prop GLB unwraps via xatlas (48 charts), maps parts to `hard-surface`, `metal`, `organic` and `fabric`, and reaches **97.5% visible-surface paint coverage (312 px/m)** in 20 views with `holes = 0`.
 
-## 6. Player-path importance map (navmesh + bots)
+## 6. ~~Player-path importance map (navmesh + bots)~~ (done: `src/core/player-paths.ts`, `--paths`, viewer `paths` overlay)
 
 **Why:** today "seen" is binary per triangle (`seenTriangles`) plus nearest-eye distance (`seenDistance`), taken from a grid of standing spots (`samplePlayerPoints`). Where players actually walk and look should decide where the paint and texel budget goes.
 
-- Optional pre-pass before planning. Bake a navmesh from the level (Recast via `recast-navigation-js`, or pure-JS `navcat`; `three-pathfinding` if the file ships a navmesh). Walk a few bots along plausible paths: random exploration, routes between entry points, or a short crowd sim.
-- From each bot pose and look direction, accumulate hits on the original triangles. Cast rays against the existing BVH or use GPU occlusion. Score = hits × 1/distance × view-angle quality (prefer frontal).
-- Store a per-triangle weight array and feed it to:
-  - the layout scale in `nearScaled` / `seenLayout` (instead of the 0/1 seen flag)
-  - the planner's cell weights in `selectViews` (item 8)
-  - hole/repair priority, and where to spend material detail
-- Low-rank faces get coarser coverage or are deferred. For objects use spherical "bots" or turntable sampling instead of a navmesh (item 5).
-- Runs client-side on the existing Three.js scene. Levels that already have good coverage skip it.
-
-**Done when:** on Courtyard/Hall, replaying the same views into an importance-weighted layout raises `measure.mjs` px/m on high-rank faces over `--layout near`, and the planner reaches the same weighted coverage with fewer views.
+- **Walkable nav-graph + simulated bots (`bakeNavGraph`, `navShortestPath`, `walkBots`, `playerImportance`).** Bakes a capsule-cleared multi-storey 2.5D navigation graph directly on `level.bvh` (0.05–0.15 s client-side, zero external WASM dependencies), selects perimeter entry & landmark nodes, and walks simulated bots along shortest landmark routes plus self-avoiding curiosity paths (or turntable + spherical inspection shells in `--mode object`).
+- **Frustum gaze accumulation & UV tiering (`rankTier`, `splitUvByRank`, `pathLayoutScale`).** Casts a 9-ray frustum fan from every bot pose against `level.bvh` (mapping permuted BVH indices back to mesh triangles), scoring `hits × cos^1.35(θ) / (distance × area)` into a continuous `[0, 1]` rank. Groups strips by exposure tier, splits hollow welded ring remnants so inner voids don't waste atlas space, scales islands continuously in `seenLayout` / `nearScaled`, weights `selectViews` / `combinedPlanWeights` / `holeTargets` / `unfinishedParts`, exposes `highRank` px/m in `measure.mjs`, and adds a `'paths'` false-colour viewer overlay.
+- **Measured (`--layout near` vs `--layout near --paths`, 4096 px atlas, 2048 px views):**
+  - **Fixed-view replay (`18` views):** on **Courtyard** (`203` nav nodes, `1,712` poses, 0.10 s), high-rank sightlines jump **56.3 → 86.1 px/m median (+53%)**, **54.0 → 78.5 px/m mean (+45%)** and **56.3 → 88.1 texels/m (+57%)**; on **Hall** (`58` nav nodes, `1,404` poses, 0.05 s), high-rank sightlines jump **89.8 → 108.1 px/m median (+20%)**, **81.9 → 109.5 px/m mean (+34%)**, **89.8 → 147.4 px/m p75 (+64%)** and **89.8 → 156.2 texels/m (+74%)**.
+  - **Planner efficiency (same layout):** reaches unweighted 22-view sharp/Fisher path-weighted coverage in **18 views (-18%)** on Courtyard, **16–18 views (-18% to -27%; 14 views / -36% with `--paths --adaptive`)** on Hall, **12–18 views (-18% to -33%)** on Loft, and **14–18 views (-18% to -36%)** on Hangar.
 
 ## 7. ~~Geometry prepasses: per-face weights (AO, curvature, class, light)~~ (done: `src/core/surface-weights.ts`, `--cavity`, `--weights`, viewer weights overlay)
 

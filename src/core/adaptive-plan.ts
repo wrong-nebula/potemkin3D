@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OUTDOOR, type Lighting } from './clay';
 import { paintability } from './paintability';
 import { cellDensity, pixelsPerMetre, probeCells, type CellList, type PlanOptions, type Surface } from './planner';
+import { playerImportance } from './player-paths';
 import type { Level } from './scene';
 import { cellWeights, surfaceWeights } from './surface-weights';
 import { lookAt, type ViewRenderer, type ViewSpec } from './views';
@@ -179,10 +180,15 @@ export function combinedPlanWeights(level: Level, points: THREE.Vector3[], grid:
   const namedFeature = level.labels.map((name, k) => !!name && level.surfaceArea > 0 && partArea[k] > 0 && partArea[k] < 0.12 * level.surfaceArea);
 
   const triW = new Float32Array(tris);
+  if (level.paths && (!level.playerPaths || level.playerPaths.rank.length !== tris)) {
+    level.playerPaths = playerImportance(level);
+  }
+  const pathRank = level.playerPaths && level.playerPaths.rank.length === tris ? level.playerPaths.rank : null;
   for (let t = 0; t < tris; t++) {
     const l = label ? Math.round(label[3 * t]) : 0;
     const feat = 1 + 0.35 * sw.curvature[t] * sw.openness[t] + (namedFeature[l] ? 0.15 : 0);
-    triW[t] = sw.importance[t] * feat * (geo ? geo[t] : 1);
+    const pw = pathRank ? (pathRank[t] > 0 ? 0.15 + 1.65 * pathRank[t] : 0.04) : 1;
+    triW[t] = sw.importance[t] * feat * (geo ? geo[t] : 1) * pw;
   }
   return cellWeights(uv, triW, grid);
 }

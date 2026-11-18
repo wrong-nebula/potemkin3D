@@ -13,6 +13,7 @@ import { defectMap, fullDetail } from './defects';
 import { DEFAULT_PLAN, FLOOR_BAND, cellDensity, holeLookViews, holeTargets, holeViews, lookViews, pixelsPerMetre, plan as makePlan, samplePlayerPoints, surfaceOf, type Plan, type PlanOptions } from './planner';
 import { nameParts } from './naming';
 import { classifyView, describeView } from './semantics';
+import { cellWeights } from './surface-weights';
 import { swatchSheet, wantsSwatches } from './swatches';
 import { makeCamera, ViewRenderer, type ViewSpec } from './views';
 
@@ -654,10 +655,17 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
     // Candidates: level cameras at eye height aimed at the unpainted patches, then cameras looking steeply down
     // from above (the only ones that see the tops of props, but models rarely paint those views faithfully).
     const cells = engine.atlas.texelGeometry(256);
+    const wAttr = engine.level.geometry.getAttribute('weight');
+    let repairW: Float32Array | undefined;
+    if (wAttr) {
+      const triW = new Float32Array(Math.floor(wAttr.count / 3));
+      for (let t = 0; t < triW.length; t++) triW[t] = wAttr.getX(3 * t);
+      repairW = cellWeights(engine.level.geometry.getAttribute('uv').array, triW, 256);
+    }
     let cands: ViewSpec[];
     let full = Infinity;
     if (pass === 'holes') {
-      const targets = holeTargets(cells.pos, cells.nrm, engine.atlas.cellQuality(256));
+      const targets = holeTargets(cells.pos, cells.nrm, engine.atlas.cellQuality(256), 3, 24, repairW);
       cands = [...holeLookViews(engine.level, targets, plan.points), ...holeViews(engine.level, { ...DEFAULT_PLAN, ...o.plan }, plan.points)];
     } else {
       const eyes = samplePlayerPoints(engine.level, { ...DEFAULT_PLAN, ...o.plan, spacing: Math.min(2, o.plan.spacing ?? DEFAULT_PLAN.spacing) });
@@ -668,7 +676,7 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
       onEvent({ type: 'check', message: `clean-up: of what players can see, ${(100 * defects.unpainted / Math.max(1, defects.seen)).toFixed(1)}% is unpainted and ` +
         `${(100 * defects.poor / Math.max(1, defects.seen)).toFixed(1)}% poorly captured` });
       // a defect cell counts as a hole to aim at; everything else (fine, or seen by nobody) as painted
-      const targets = holeTargets(cells.pos, cells.nrm, defects.cls.map((c) => (c ? 0 : 1)), 3, 60);
+      const targets = holeTargets(cells.pos, cells.nrm, defects.cls.map((c) => (c ? 0 : 1)), 3, 60, repairW);
       cands = lookViews(engine.level, targets, eyes, 3, 'clean');
     }
     const PROBE = 256;
