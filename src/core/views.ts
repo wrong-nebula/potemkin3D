@@ -83,6 +83,7 @@ uniform sampler2D gUvq;
 uniform highp sampler2DArray atlas;
 uniform float ratio;
 uniform float cap;
+uniform float lens;
 in vec2 vUv;
 layout(location = 0) out vec4 outState;
 layout(location = 1) out vec4 outMask;
@@ -94,7 +95,7 @@ void main() {
   vec4 a = geo ? atlasTexel(atlas, uvq.xy) : vec4(0.0);
   // cap: the capture quality at which the texture holds all the detail it can; a view that could do better
   // than that still finds such texels good enough
-  bool known = geo && a.a > 0.0003 && a.a >= ratio * min(uvq.z, cap);   // 0.0003: the finishing fill is not paint
+  bool known = geo && a.a > 0.0003 && a.a >= ratio * min(lens * uvq.z, cap);   // 0.0003: the finishing fill is not paint
   outState = known ? vec4(a.rgb, 1.0) : texelFetch(clay, p, 0);
   outMask = vec4(geo ? 1.0 : 0.0, known ? 1.0 : 0.0, geo && a.a > 0.0003 ? 1.0 : 0.0, 1.0);   // b: painted at all (by a view)
 }`;
@@ -135,7 +136,7 @@ export class ViewRenderer {
       depthBuffer: false, generateMipmaps: false,
     });
     this.stateMaterial = passMaterial(STATE_FRAG, {
-      clay: { value: null }, gNrm: { value: null }, gUvq: { value: null }, atlas: { value: null }, atlasGrid: { value: 1 }, ratio: { value: 0.4 }, cap: { value: 1e9 },
+      clay: { value: null }, gNrm: { value: null }, gUvq: { value: null }, atlas: { value: null }, atlasGrid: { value: 1 }, ratio: { value: 0.4 }, cap: { value: 1e9 }, lens: { value: 1 },
     });
     this.validationMaterial = passMaterial(VALIDATION_FRAG, {
       gNrm: { value: this.geometryTarget.textures[1] }, gUvq: { value: this.geometryTarget.textures[2] },
@@ -153,7 +154,7 @@ export class ViewRenderer {
    * @param clay the view as lit clay; null where only the mask is wanted (the state then shows clay as black)
    * @param atlas the level's texture (core/atlas.ts): its pages and how many a side
    */
-  renderState(clay: THREE.Texture | null, atlas: { texture: THREE.Texture; grid: number }, ratio: number, cap = 1e9) {
+  renderState(clay: THREE.Texture | null, atlas: { texture: THREE.Texture; grid: number }, ratio: number, cap = 1e9, lens = 1) {
     const u = this.stateMaterial.uniforms;
     u.clay.value = clay ?? this.geometryTarget.textures[1];
     u.gNrm.value = this.geometryTarget.textures[1];
@@ -162,6 +163,7 @@ export class ViewRenderer {
     u.atlasGrid.value = atlas.grid;
     u.ratio.value = ratio;
     u.cap.value = cap;
+    u.lens.value = lens;
     this.gpu.pass(this.stateMaterial, this.stateTarget);
     return {
       state: this.gpu.readU8(this.stateTarget, 0),

@@ -7,6 +7,7 @@ import { paintability } from './paintability';
 import { forEachTriangle, type Level } from './scene';
 import { looksLikeRoof, ROOF_MIN_NY, roofLabels } from './semantics';
 import { cellWeights } from './surface-weights';
+import { adaptiveGroundViews, budgetAdvice, combinedPlanWeights, selectFisherViews, type BudgetAdvice } from './adaptive-plan';
 import type { ViewRenderer, ViewSpec } from './views';
 import { lookAt, makeCamera } from './views';
 
@@ -49,18 +50,24 @@ export interface PlanOptions {
   /**
    * What the players' views are picked for. 'coverage': the most new texture cells seen well. 'sharpness': the
    * texture detail each adds, in view pixels per texel capped at 1, times how likely a model is to paint the view
-   * faithfully; it needs the texture's layout (`Surface`). On the Courtyard a sharpness plan painted more of the
-   * texture and gave later views more context, but no more detail, for a little more money; so coverage is the default.
+   * faithfully; it needs the texture's layout (`Surface`). 'fisher': concave log-resolution utility over weighted
+   * cells with live painted-context paintability (core/adaptive-plan.ts).
    */
-  objective: 'sharpness' | 'coverage';
+  objective: 'sharpness' | 'coverage' | 'fisher';
   /** Extra candidates aimed at each patch of surface from this many of the nearest player spots (0 = none). */
   lookAt: number;
+  /** Iterative importance-driven probe refinement around under-covered important / curved / named regions (TODO item 8). */
+  adaptive?: boolean;
+  /** Weight cell importance by surface geodesic distance from player spots (default true when `adaptive` is on). */
+  geodesic?: boolean;
+  /** Atlas resolution along a side (px), for sparse PBR height-tile budget advice. */
+  atlasSize?: number;
 }
 
 export const DEFAULT_PLAN: PlanOptions = {
   eyeHeight: 1.65, spacing: 4, fov: 90, yaws: 8, pitchDeg: 6, downYaws: 0, downPitchDeg: -40, maxViews: 36, targetCoverage: 0.97,
   probeSize: 96, grid: 256, goodRatio: 0.5, goodAbs: 0.12, maxParallel: 1, aerial: 0, roofs: 0, roofDistance: 15, floors: 0, floorHeight: 3.5, holes: 0, cleanup: 0, seed: 7,
-  objective: 'coverage', lookAt: 0,
+  objective: 'coverage', lookAt: 0, adaptive: false,
 };
 
 export interface Plan {
@@ -79,6 +86,8 @@ export interface Plan {
    * all. The rest is resolution spent on undersides and hidden faces.
    */
   texture?: { seen: number };
+  /** Spend & bottleneck report from adaptive / Fisher planning (core/adaptive-plan.ts). */
+  budget?: BudgetAdvice;
 }
 
 /** The texture cells a camera sees with the best quality per cell, and (when asked for) what its frame holds. */
@@ -718,31 +727,18 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
   const G2 = o.grid * o.grid;
   const points = samplePlayerPoints(level, o);
   if (!points.length) throw new Error('found nowhere to stand: is the level Y-up with walkable floors?');
-  const bySharpness = o.objective === 'sharpness' && !!surface;
-  // Per-triangle geometry importance weights (`weight` attribute riding alongside `label`), projected onto the planner's UV grid.
+  const byAdaptive = !!o.adaptive && !!surface;
+  const byFisher = (byAdaptive || o.objective === 'fisher') && !!surface;
+  const bySharpness = !byFisher && o.objective === 'sharpness' && !!surface;
+  // Per-triangle geometry importance weights (`weight` attribute riding alongside `label`), or combined item 7 + geodesic weights when adaptive.
   const wAttr = level.geometry.getAttribute('weight');
   let weights = surface?.weight;
-  if (!weights && wAttr) {
+  if (byAdaptive || o.geodesic) {
+    weights = combinedPlanWeights(level, points, o.grid, { eyeHeight: o.eyeHeight, geodesic: o.geodesic ?? true });
+  } else if (!weights && wAttr) {
     const triW = new Float32Array(Math.floor(wAttr.count / 3));
     for (let t = 0; t < triW.length; t++) triW[t] = wAttr.getX(3 * t);
     weights = cellWeights(level.geometry.getAttribute('uv').array, triW, o.grid);
-  }
-  // Three passes, each with its own budget: the players' views, close views over the roofs, and the aerial ring
-  // for what's left (outer walls, tops of props). Players' and aerial views leave roofs to the roof pass.
-  // Candidates: every heading from every player spot, and (with the texture's layout known) cameras aimed at each
-  // patch of surface from the spots nearest to it.
-  const ground = candidateViews(points, o);
-  if (surface && o.lookAt > 0) {
-    const patches = holeTargets(surface.pos, surface.nrm, new Float32Array(G2), 3, 400, weights);
-    for (const v of lookViews(level, patches, points, o.lookAt)) ground.push({ ...v, id: ground.length });
-  }
-  const groundLists = probeCells(gpu, views, ground, o, undefined, bySharpness);
-  planStats.groundCandidates = ground.length;
-  let sharp: Sharp | undefined;
-  if (bySharpness) {
-    sharp = { density: cellDensity(surface!, o.grid), ppm: ground.map((v) => pixelsPerMetre(views.size, v.fov)), ppmExisting: pixelsPerMetre(views.size, o.fov),
-      // nothing is painted when the plan is made, so each view is judged as if it had no context
-      paint: ground.map((v, k) => paintability({ pitch: v.pitch, ...groundLists[k].shape!, context: 0 })) };
   }
   // The floor pass: straight down over the ground, chosen over ground surfaces only and painted first.
   const floorCands = o.floors > 0 ? floorViews(level, o, points) : [];
@@ -763,12 +759,56 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
     passCells = roofCells ? roofCells.slice() : new Uint8Array(G2);
     for (const k of floorSel.order) for (const c of floorLists[k].cells) passCells[c] = 1;
   }
-  const sel = selectViews(groundLists, o, [], existing, passCells, sharp, weights);
+
+  let ground: ViewSpec[];
+  let groundLists: CellList[];
+  let sel: { order: number[]; waves: number[][]; qBest: Float32Array; reachable: number; predicted: number[] };
+  let fisherMeta: { marginalShares: number[]; weightedCoverage: number; rounds: number } | undefined;
+
+  if (byAdaptive) {
+    const coarse = candidateViews(points, { ...o, yaws: Math.min(o.yaws, 8) });
+    const ad = adaptiveGroundViews(gpu, level, views, points, o, surface!, {
+      existing, skip: passCells, coarseSpecs: coarse, weights: weights!,
+    });
+    ground = ad.specs;
+    groundLists = ad.lists;
+    sel = ad.sel;
+    fisherMeta = { marginalShares: ad.sel.marginalShares, weightedCoverage: ad.sel.weightedCoverage, rounds: ad.rounds };
+    planStats.groundCandidates = ground.length;
+    planStats.adaptiveRounds = ad.rounds;
+  } else {
+    ground = candidateViews(points, o);
+    if (surface && o.lookAt > 0) {
+      const patches = holeTargets(surface.pos, surface.nrm, new Float32Array(G2), 3, 400, weights);
+      for (const v of lookViews(level, patches, points, o.lookAt)) ground.push({ ...v, id: ground.length });
+    }
+    groundLists = probeCells(gpu, views, ground, o, undefined, bySharpness || byFisher);
+    planStats.groundCandidates = ground.length;
+    if (byFisher) {
+      const fsel = selectFisherViews(groundLists, ground, o, {
+        density: cellDensity(surface!, o.grid), weights, existing, skip: passCells, viewSize: views.size,
+      });
+      sel = fsel;
+      fisherMeta = { marginalShares: fsel.marginalShares, weightedCoverage: fsel.weightedCoverage, rounds: 1 };
+    } else {
+      let sharp: Sharp | undefined;
+      if (bySharpness) {
+        sharp = { density: cellDensity(surface!, o.grid), ppm: ground.map((v) => pixelsPerMetre(views.size, v.fov)), ppmExisting: pixelsPerMetre(views.size, o.fov),
+          // nothing is painted when the plan is made, so each view is judged as if it had no context
+          paint: ground.map((v, k) => paintability({ pitch: v.pitch, ...groundLists[k].shape!, context: 0 })) };
+      }
+      sel = selectViews(groundLists, o, [], existing, passCells, sharp, weights);
+    }
+  }
   const roofSel = roofCands.length
     ? selectViews(roofLists, { ...o, maxViews: o.roofs, targetCoverage: 0.98 }, roofCands.map(() => true), existing) : null;
   // the aerial ring only fills in after the players' views
+  const basePpm = pixelsPerMetre(views.size, o.fov);
   const have = existing ? existing.slice() : new Float32Array(G2);
-  for (const k of sel.order) { const l = groundLists[k]; for (let i = 0; i < l.cells.length; i++) have[l.cells[i]] = Math.max(have[l.cells[i]], l.q[i]); }
+  for (const k of sel.order) {
+    const l = groundLists[k], scale = pixelsPerMetre(views.size, ground[k].fov) / basePpm;
+    for (let i = 0; i < l.cells.length; i++) have[l.cells[i]] = Math.max(have[l.cells[i]], l.q[i] * scale);
+  }
   const airSel = air.length ? selectViews(airLists, { ...o, maxViews: 2 * o.aerial }, air.map(() => true), have, roofCells) : null;
   const picked = [
     ...(floorSel?.order.map((k) => ({ spec: floorCands[k], cells: floorLists[k] })) ?? []),
@@ -782,7 +822,13 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
     ...picked.slice(nPlay).map((_, j) => [nPlay + j])];
   // Predicted coverage over everything any candidate sees well, in paint order.
   const qAll = new Float32Array(G2);
-  for (const l of [...floorLists, ...groundLists, ...roofLists, ...airLists]) for (let i = 0; i < l.cells.length; i++) qAll[l.cells[i]] = Math.max(qAll[l.cells[i]], l.q[i]);
+  const addQ = (specs: ViewSpec[], lists: CellList[]) => {
+    for (let k = 0; k < lists.length; k++) {
+      const l = lists[k], scale = pixelsPerMetre(views.size, specs[k].fov) / basePpm;
+      for (let i = 0; i < l.cells.length; i++) qAll[l.cells[i]] = Math.max(qAll[l.cells[i]], l.q[i] * scale);
+    }
+  };
+  addQ(floorCands, floorLists); addQ(ground, groundLists); addQ(roofCands, roofLists); addQ(air, airLists);
   const good = (c: number, q: number) => q >= Math.min(o.goodRatio * qAll[c], o.goodAbs);
   const cov = new Uint8Array(G2);
   let reachable = 0, n = 0;
@@ -791,30 +837,45 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
     reachable++;
     if (existing && good(c, existing[c])) { cov[c] = 1; n++; }
   }
-  const predicted = picked.map(({ cells: l }) => {
-    for (let i = 0; i < l.cells.length; i++) if (!cov[l.cells[i]] && good(l.cells[i], l.q[i])) { cov[l.cells[i]] = 1; n++; }
+  const predicted = picked.map(({ spec, cells: l }) => {
+    const scale = pixelsPerMetre(views.size, spec.fov) / basePpm;
+    for (let i = 0; i < l.cells.length; i++) if (!cov[l.cells[i]] && good(l.cells[i], l.q[i] * scale)) { cov[l.cells[i]] = 1; n++; }
     return reachable ? n / reachable : 0;
   });
   // How sharply the plan would sample the texture, if every view is painted as planned.
   let sharpness: Sampling | undefined;
   let texture: Plan['texture'];
+  let budget: BudgetAdvice | undefined;
   if (surface) {
     const best = existing ? existing.slice() : new Float32Array(G2);
     for (const { spec, cells: l } of picked) {
-      const scale = pixelsPerMetre(views.size, spec.fov) / pixelsPerMetre(views.size, o.fov);   // as quality at the default lens
+      const scale = pixelsPerMetre(views.size, spec.fov) / basePpm;   // as quality at the default lens
       for (let i = 0; i < l.cells.length; i++) best[l.cells[i]] = Math.max(best[l.cells[i]], l.q[i] * scale);
     }
     const coveredCells = new Uint8Array(G2);
     for (let c = 0; c < G2; c++) coveredCells[c] = surface.nrm[4 * c + 3] > 0.5 ? 1 : 0;
-    sharpness = sampling(best, surface.pos, coveredCells, o.grid, surface.texelsPerCell, pixelsPerMetre(views.size, o.fov));
+    sharpness = sampling(best, surface.pos, coveredCells, o.grid, surface.texelsPerCell, basePpm);
     let island = 0, seen = 0;
     for (let c = 0; c < G2; c++) if (coveredCells[c]) { island++; if (sel.qBest[c] > 0 || (passCells && passCells[c])) seen++; }
     texture = { seen: island ? seen / island : 0 };
+    if (fisherMeta && weights) {
+      budget = budgetAdvice({
+        marginalShares: fisherMeta.marginalShares,
+        weightedCoverage: fisherMeta.weightedCoverage,
+        medianRatio: sharpness.p50,
+        surface,
+        weights,
+        grid: o.grid,
+        atlasSize: o.atlasSize ?? Math.round(surface.texelsPerCell * o.grid),
+        rounds: fisherMeta.rounds,
+        probedCandidates: ground.length,
+      });
+    }
   }
   planStats.floorViews = nFloor;
   planStats.roofCandidates = roofCands.length;
   planStats.roofViews = roofSel?.order.length ?? 0;
   planStats.aerialViews = airSel?.order.length ?? 0;
   return { points, views: picked.map((p, i) => ({ ...p.spec, id: i })), waves, viewCells: picked.map((p) => p.cells), qBest: qAll,
-    grid: o.grid, reachableCells: reachable, predicted, sharpness, texture };
+    grid: o.grid, reachableCells: reachable, predicted, sharpness, texture, ...(budget ? { budget } : {}) };
 }

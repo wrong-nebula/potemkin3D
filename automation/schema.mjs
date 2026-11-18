@@ -22,7 +22,8 @@ export const planOptions = object(optional({
   maxViews: count, targetCoverage: fraction, probeSize: size, grid: size, goodRatio: fraction,
   goodAbs: positive, maxParallel: z.number().int().min(1).max(16), aerial: count, roofs: count,
   roofDistance: positive, floors: count, floorHeight: positive, holes: count, cleanup: count,
-  seed: z.number().int(), objective: z.enum(['coverage', 'sharpness']), lookAt: count,
+  seed: z.number().int(), objective: z.enum(['coverage', 'sharpness', 'fisher']), lookAt: count,
+  adaptive: z.boolean(), geodesic: z.boolean(),
 }));
 const note = object({ text, at: vector, size: positive.optional(), to: vector.optional() });
 const setting = object(optional({ place: text, carriers: text, details: text, additions: z.array(text), materials: text, fill: text, ground: text, light: text }));

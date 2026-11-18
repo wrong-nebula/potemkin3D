@@ -122,7 +122,8 @@ export function makeApi(session: Session) {
     plan(opts: Partial<PlanOptions> = {}) {
       const p = session.makePlan(opts);
       return { views: p.views.length, points: p.points.length, waves: p.waves.map((w) => w.length),
-        predicted: p.predicted[p.predicted.length - 1], sharpness: p.sharpness, texture: p.texture, stats: { ...planStats },
+        predicted: p.predicted[p.predicted.length - 1], sharpness: p.sharpness, texture: p.texture,
+        ...(p.budget ? { budget: p.budget } : {}), stats: { ...planStats },
         pitch: p.views.map((v) => Math.round(THREE.MathUtils.radToDeg(v.pitch))), fov: p.views.map((v) => v.fov),
         // where the cameras stand (eye positions, to 0.1 m): shows at a glance whether a mezzanine or a yard was reached
         spots: p.points.map((q) => q.toArray().map((x) => Math.round(x * 10) / 10)) };
@@ -398,10 +399,10 @@ export function makeApi(session: Session) {
       const { pos, nrm } = e.atlas.texelGeometry(G);
       const covered = new Uint8Array(G * G);
       for (let i = 0; i < covered.length; i++) covered[i] = nrm[4 * i + 3] > 0.5 ? 1 : 0;
-      const fov = steps[0]?.spec.fov ?? 90;
       // sharpness is of what views (and part textures) painted: the finishing fill has no detail to measure
+      // `atlas.a` carries `lens = 1 / tan(fov / 2)` per view (`1` at 90°), so multiplying by `S / 2` gives exact view pixels per metre across mixed lenses.
       const captured = e.atlas.cellQuality(G).map((q) => (q > PAINTED ? q : 0));
-      const s = sampling(captured, pos, covered, G, e.atlas.size / G, S / 2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2));
+      const s = sampling(captured, pos, covered, G, e.atlas.size / G, S / 2);
       // what a player can see, from spots much denser than the cameras', and how much of that is painted
       const V = 256;
       const cells = e.atlas.texelGeometry(V), quality = e.atlas.cellQuality(V);

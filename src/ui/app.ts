@@ -89,6 +89,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
   const budgetLab = h('span', { class: 'lab' }, 'Max views · 36');
   budget.oninput = () => (budgetLab.textContent = `Max views · ${budget.value}`);
   const aerialBox = h('input', { type: 'checkbox', checked: '' });
+  const adaptiveBox = h('input', { type: 'checkbox' });
   const checkBox = h('input', { type: 'checkbox', checked: '' });
   const planesBox = h('input', { type: 'checkbox', checked: '' });
   const swatchBox = h('input', { type: 'checkbox' });
@@ -170,7 +171,9 @@ export function mountUi(session: Session, panel: HTMLElement) {
     partsSection,
     h('section', {}, h('label', {}, 'Light'), segLight, h('div', { class: 'row' }, h('span', { class: 'lab' }, 'Sun'), az, el)),
     h('section', {}, h('label', {}, 'Models'), h('div', { class: 'lab' }, 'First view'), firstSel, h('div', { class: 'lab' }, 'Fills'), fillSel),
-    h('section', {}, budgetLab, budget, h('label', { class: 'row note' }, aerialBox, 'Also paint roofs and outer walls (roof and aerial cameras)'),
+    h('section', {}, budgetLab, budget,
+      h('label', { class: 'row note' }, adaptiveBox, 'Adaptive importance-driven cameras (focus views on lit, open, curved and player-near surfaces)'),
+      h('label', { class: 'row note' }, aerialBox, 'Also paint roofs and outer walls (roof and aerial cameras)'),
       h('label', { class: 'row note' }, floorBox, 'Paint the ground from straight above first, so it is not stretched (floor cameras)'),
       h('label', { class: 'row note' }, checkBox, 'Check each view against the blockout and repaint what the model painted over (SAM 2.1, runs in this tab)'),
       h('label', { class: 'row note' }, planesBox, 'Also check that flat walls and floors come out flat and facing the right way (MoGe-2 on fal, about 1¢ a view)'),
@@ -466,7 +469,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
     if (f) void loadFile(f).catch((err) => say(String(err)));
   };
 
-  const planOpts = () => ({ maxViews: +budget.value, aerial: aerialBox.checked ? 8 : 0, roofs: aerialBox.checked ? 24 : 0, floors: floorBox.checked ? 24 : 0, holes: 12 });
+  const planOpts = () => ({ maxViews: +budget.value, adaptive: adaptiveBox.checked, aerial: aerialBox.checked ? 8 : 0, roofs: aerialBox.checked ? 24 : 0, floors: floorBox.checked ? 24 : 0, holes: 12 });
   planBtn.onclick = () => {
     try {
       const p = session.makePlan(planOpts());
@@ -479,9 +482,10 @@ export function mountUi(session: Session, panel: HTMLElement) {
       vCost.textContent = `≤${money(q.cost)}`;
       vTime.textContent = `~${Math.max(1, Math.round(q.seconds / 60))}m`;
       say(`planned ${p.views.length} views from ${p.points.length} spots, ${p.waves.length} waves, ` +
-        `${Math.round(100 * p.predicted[p.predicted.length - 1])}% of reachable surface. ` +
+        `${Math.round(100 * (p.predicted[p.predicted.length - 1] ?? 0))}% of reachable surface. ` +
         (p.texture ? `Players' cameras can see ${Math.round(100 * p.texture.seen)}% of the texture` +
           (p.texture.seen < 0.5 ? '; the rest of its resolution goes to faces nobody sees. ' : '. ') : '') +
+        (p.budget ? `Adaptive (${p.budget.rounds} rounds, ${p.budget.probedCandidates} probes): knee at ${p.budget.recommendedViews} views, limit is ${p.budget.bottleneck}, ${p.budget.sparseHeightTiles.active}/${p.budget.sparseHeightTiles.total} PBR tiles hold important surface. ` : '') +
         `At most ${money(q.cost)} and about ${Math.max(1, Math.round(q.seconds / 60))} min, counting up to ${planOpts().holes} views for holes` +
         (q.again ? ` and ${money(q.again)} for second goes at whatever the blockout check holds back (only the views that need one)` : '') +
         (q.planes ? `, and ${money(q.planes)} for the plane check.` : '.'));

@@ -61,7 +61,7 @@ Some options trade quality for memory, cost, or complexity. Surface-directed cam
 
 ### 1. Plan from where the scene will be seen
 
-The engine samples walkable ground, places eye-height cameras, checks visibility, and selects overlapping views. Geometry buffers record surface position, normals, UVs and part identity. Additional cameras can cover roofs, ground and holes. The optional sharpness objective favors cameras that improve projected sampling density instead of simply covering more texels.
+The engine samples walkable ground, places eye-height cameras, checks visibility, and selects overlapping views. Geometry buffers record surface position, normals, UVs and part identity. Additional cameras can cover roofs, ground and holes. The optional sharpness objective favors cameras that improve projected sampling density instead of simply covering more texels, while `--adaptive` (`adaptive-plan.ts`) runs iterative probe-and-select refinement weighted by surface geodesic distance from player spots and the geometry prepasses, using a concave Fisher-style resolution objective, adaptive camera lenses (`62°–86°`) and a spend/bottleneck report.
 
 ### 2. Spend texture resolution on useful surfaces
 

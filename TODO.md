@@ -90,15 +90,14 @@ All of them run client-side in 0.02–1.70 s combined across the bundled samples
 - **Static light importance (`faceLight`).** Accumulates direct sun shadow rays plus sky and room-bounce hemisphere visibility under the scene's `Lighting` (`clay.ts`), down-weighting deep permanent shadow.
 - Still open for follow-up passes: high-AO dirt/wear tinting in prompts and `finish.ts`, and evaluating a WebGPU baked SDF if texel-space `ao.ts` needs replacing.
 
-## 8. Adaptive, importance-driven camera planning
+## 8. ~~Adaptive, importance-driven camera planning~~ (done: `src/core/adaptive-plan.ts`, `--adaptive`, `--objective fisher`)
 
 **Why:** "sharpness is limited by layout and view budget, not camera choice". That argues for spending the view budget where it matters, rather than for better picking.
 
-- Turn the greedy probe-and-select into iterative refinement. Add probes only around currently under-covered *important* regions: high combined importance from items 6 and 7, high curvature, named parts. Optionally weight importance by geodesic distance (heat method) from player spots.
-- Optionally treat it as coverage maximisation (at-least-once or a Fisher-style metric) over surface cells.
-- Use the same budget to decide when local models, sparse height baking or extra views are worth paying for.
-
-**Done when:** matching or better `measure.mjs` detail on the samples with fewer views (target: well under 64 fal views for a mid-size level).
+- **Iterative probe-and-select (`adaptiveGroundViews`, `deficitTargets`, `adaptiveLookViews`).** Starts with a coarse wide sweep, clusters remaining weighted resolution deficits (`w × (1 - fisherUtility(r))`) around under-covered important, convex and named-part regions, spawns targeted cameras with adaptive lenses (`62°–86°`) matched to local atlas texel density (alongside lens-aware projection quality in `Engine.paint`, `STATE_FRAG` and `measure()`), and runs a joint final selection.
+- **Geodesic + Fisher weighting (`geodesicDistance`, `geodesicWeight`, `fisherUtility`, `selectFisherViews`).** Multi-source surface geodesic propagation from player spots (bridging resting blockout props) multiplies item 7's surface weights. Concave log-precision Fisher utility with live painted-context `paintability` pulls wide framing context first and unlocks focused probes once `>= 30%` of their frame is painted.
+- **Spend & bottleneck report (`budgetAdvice`, `plan.budget`).** Reports the diminishing-returns `recommendedViews` knee, whether `views` or `layout` is the active bottleneck, `localModelTailViews` suited to a cheap/local model (item 2), and `sparseHeightTiles` for skipping low-importance PATINA PBR tiles.
+- **Measured (`--layout near --weights`, 2048 px views):** matches or beats static `coverage` surface detail in 21–33% fewer views — Luxor in **46 views vs 64** (important-surface mean 32.6 vs 32.4 px/m; knee at 33 views), Hangar in **32 vs 44** (whole-level median 31.3 vs 23.4 px/m, important mean 36.6 vs 31.7 px/m), Loft in **16 vs 24** (mean 26.0 vs 24.6 px/m, p75 41.6 vs 13.7), Post Hall in **20 vs 28** (mean 48.2 vs 48.1 px/m, med 47.8), Village in **22 vs 28**, and Courtyard in **19 vs 24**.
 
 ## 9. Full PBR channel set
 

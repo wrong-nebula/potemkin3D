@@ -64,10 +64,11 @@ export class Engine {
   /** Clay render, geometry buffers and the state image for one view, against the current texture. */
   renderView(spec: ViewSpec, ratio = this.options.qualityRatio, cap = 1e9) {
     const camera = makeCamera(spec);
+    const lens = camera.projectionMatrix.elements[5] || 1;
     this.views.renderGeometry(camera);
     const g = this.views.geometryTarget.textures;
     this.clay.render(camera, this.clayTarget, { pos: g[0], nrm: g[1] });
-    const { state, mask } = this.views.renderState(this.clayTarget.texture, this.atlas, ratio, cap);
+    const { state, mask } = this.views.renderState(this.clayTarget.texture, this.atlas, ratio, cap, lens);
     return { camera, state, mask, clay: this.gpu.readU8(this.clayTarget) };
   }
 
@@ -80,10 +81,11 @@ export class Engine {
   /** Project a composited image (top-down RGBA, view size) into the texture from `spec`'s camera. */
   paint(spec: ViewSpec, comp: Uint8ClampedArray, detail = 1) {
     const camera = makeCamera(spec);
+    const lens = camera.projectionMatrix.elements[5] || 1;
     this.views.renderGeometry(camera);
     (this.compTexture.image.data as Uint8Array).set(comp);
     this.compTexture.needsUpdate = true;
-    this.atlas.project(camera, this.views.geometryTarget.textures[0], this.compTexture, this.options.qualityRatio, detail, this.options.minCos, this.options.edgeGuard, this.options.frameMargin);
+    this.atlas.project(camera, this.views.geometryTarget.textures[0], this.compTexture, this.options.qualityRatio, detail * lens, this.options.minCos, this.options.edgeGuard, this.options.frameMargin);
   }
 
   /** 1 where a view's pixels show level geometry (0 = sky), top-down. */
