@@ -98,17 +98,15 @@ All of them run client-side in 0.02–1.70 s combined across the bundled samples
 - **Albedo + geometry-conditioned intrinsic PBR estimator (`estimateIntrinsicPbr`, `makePbr`).** Decomposes consolidated/refined albedo together with the 3D position/normal buffers and geometry prepasses (`openness`, signed convex `curvature`, `faceClass`, part labels and `materialPresets`) into aligned `height` (preserving POM), `roughness`, `metalness` (suppressing dielectric rust/cavity grime while boosting exposed metallic ridges), `refinedNormal` (fused atop physical height slopes) and `edgeWear` in ~0.18 s at $0 (`--pbr-mode intrinsic` or automatic under `--provider local`), or fuses with cloud PATINA tiles under `--pbr-mode patina`.
 - **Aligned ORM & separate linear maps (`buildAlignedMaps`, `unpackLinearPbrChannels`, `exportPbr`, `exportGlb`).** Packs occlusion (R), roughness (G) and metalness (B) into aligned atlas pages (`orm.png`) and unpacks separate linear `roughness`, `metalness`, `occlusion`, `height` and `normal` PNG channels while preserving baked AO, POM height and convex-edge wear. `exportGlb` writes lit glTF 2.0 `pbrMetallicRoughness` (`metallicFactor: 1`, `roughnessFactor: 1`, shared ORM + `normalTexture` + `occlusionTexture`) whenever PBR/AO is present.
 
-## 10. Agentic Planner → Actor → Critic loop over CLI/MCP
+## 10. ~~Agentic Planner → Actor → Critic loop over CLI/MCP~~ (done: `src/core/critic.ts`, `automation/agent.mjs`, `agent-plan`/`agent-approve`/`agent-act`/`agent-critique`)
 
 **Why:** this turns one-shot jobs into a controllable, budgeted session.
 
-- **Planner:** emits a look file plus a coverage budget (and, for objects, an "object brief": target texel density, style references, animation-ready, budget).
-- **Actor:** runs plan → paint → project → repair and stores episodic traces in the run folder.
-- **Critic:** scores multi-view consistency, coverage %, seam metric and artefacts from screenshots and SAM/MoGe residuals. It writes a critique that triggers targeted repaint or extra views only where needed, before more spend is authorised.
-- Keep a memory of successful presets and repair patterns across sessions. Leave hooks to chain with Blender/Unreal MCP servers. A human approves each spend step.
-- Builds on the metrics from items 3, 6, 7 and 8, so do it after them.
-
-**Done when:** an MCP client drives a sample from blockout to export with the critic gating at least one repair round, under a stated budget.
+- **Planner (`agentPlan`, `potemkin_agent_plan`):** inspects the GLB and cross-session memory, emits `.potemkin/sessions/<id>/look.json` (and `runs/<id>/look.plan.json`) plus an explicit `coverageBudget` (`targetSeenPainted`, `targetHighRankPxPerM`, `initialViews`, `maxTotalViews`, `budgetUsd`) and, in `--mode object`, an `objectBrief` (`targetTexelDensityPxPerM`, `styleReferences`, `animationReady`, `focusParts`, `suggestedPresets`), and stages Round 1 awaiting human approval (`agentApprove`).
+- **Actor (`agentAct`, `potemkin_agent_act`):** enforces human spend approval (`APPROVAL_REQUIRED`) and per-round dollar & view caps (`BUDGET_EXCEEDED`), executes `plan → paint → project → consolidate / topUp / repair / parts / uvRefine → pbr → export`, and appends episodic traces to `runs/<id>/episodes.ndjson`.
+- **Critic (`critiqueRun`, `scoreDiagnosticFrames`, `potemkin_agent_critique`):** combines player-visible `seenPainted` & high-rank `px/m` (items 6, 7, 8), multi-view RGB consistency & boundary `seam.ratio` (item 3), SAM/MoGe `ignored` & `untouched` residuals, diagnostic screenshot clay/clipping artifact checks, and `bakedShading` correlation (item 4) into a `0..100` score and targeted repair proposal gated before extra spend is authorized.
+- **Cross-session memory & external MCP hooks:** persists successful presets, layouts and repair score gains in `.potemkin/agent-memory.json` (`potemkin://agent/memory`), exposes session state at `potemkin://agent/sessions/<id>`, and emits `externalHooks.blenderMcp` (`blender-mcp`) and `externalHooks.unrealMcp` (`unreal-mcp`) on completion.
+- **Verified end-to-end (`scripts/check-automation.mjs`):** a stdio MCP client drives `samples/courtyard.glb` from blockout to lit PBR GLB export under a `$0.25` stated budget — rejecting unapproved `agent_act`, running 2 initial views (`seenPainted` **28.7%**, Critic score **55.8**, `verdict: 'needs-repair'`), gating and human-approving a targeted repair round, raising `seenPainted` **28.7% → 100.0%** and Critic score **55.8 → 82.1** at **$0.20 / $0.25** spent, and exporting `<runId>.glb` + ORM/linear PBR maps + Blender/Unreal MCP hooks.
 
 ## 11. Research spikes (try small, keep only if they win)
 

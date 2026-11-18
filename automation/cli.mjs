@@ -32,7 +32,7 @@ export function parseCLI(args) {
     if(flag==='--wait-timeout') {timeout=Number(raw);if(!Number.isFinite(timeout)||timeout<=0)throw new AutomationError('INVALID_INPUT','Invalid wait timeout');continue;}
     const key=flag.slice(2).replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
     // Numeric IDs and paths stay strings; numeric/boolean options and nested JSON retain their types.
-    if(!['id','path','sample','name','target','scene','output'].includes(key)) {
+    if(!['id','path','sample','name','target','scene','output','sessionId','proposalId','runId','look','approvedBy'].includes(key)) {
       try{raw=JSON.parse(raw);}catch{}
     }
     input[key]=raw;

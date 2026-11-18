@@ -10,6 +10,7 @@ import { commands, invoke, examples } from './commands.mjs';
 import { ROOT, errorInfo, redact, AutomationError } from './files.mjs';
 import { workflow, jsonSchema } from './schema.mjs';
 import { getJob, listJobs, artifact } from './jobs.mjs';
+import { readAgentMemory, listAgentSessions, agentStatus } from './agent.mjs';
 
 const resultSchema=z.object({version:z.literal(1),ok:z.boolean(),data:z.unknown().optional(),error:z.unknown().optional()});
 export function createServer() {
@@ -43,7 +44,11 @@ export function createServer() {
     const data=fs.readFileSync(entry.file);
     return {contents:[{uri:uri.href,mimeType:entry.mimeType,...(entry.mimeType==='application/json'?{text:redact(data.toString())}:{blob:data.toString('base64')})}]};
   });
+  server.registerResource('agent-memory','potemkin://agent/memory',{mimeType:'application/json',description:'Cross-session memory of material presets and Critic repair patterns'},uri=>({contents:[{uri:uri.href,mimeType:'application/json',text:redact(readAgentMemory())}]}));
+  server.registerResource('agent-session',new ResourceTemplate('potemkin://agent/sessions/{id}',{list:async()=>({resources:listAgentSessions().map(s=>({uri:`potemkin://agent/sessions/${s.id}`,name:`${s.runId}: ${s.status}`,mimeType:'application/json'}))})}),
+    {mimeType:'application/json'},(uri,{id})=>({contents:[{uri:uri.href,mimeType:'application/json',text:redact(agentStatus({sessionId:id}))}]}));
   server.registerPrompt('free-luxor-tour',{description:'Inspect, plan, render and export Luxor without paid generation.'},()=>({messages:[{role:'user',content:{type:'text',text:'Read potemkin://tutorial and potemkin://examples/free-luxor. Run the example using potemkin_job_start, poll to completion, then run potemkin_screenshot for Luxor and show its image artifact. Keep allowPaid=false. Explain that selfTest paints clay views rather than generating textures.'}}]}));
+  server.registerPrompt('budgeted-agent-loop',{description:'Drive a sample from blockout to PBR GLB export via the Planner → Actor → Critic loop with human spend approval and Blender/Unreal MCP hooks.'},()=>({messages:[{role:'user',content:{type:'text',text:'Use potemkin_agent_plan on a blockout GLB with a stated budgetUsd and coverage target. Present pendingProposal to the human before calling potemkin_agent_approve, then run potemkin_agent_act. Inspect the Critic report (multi-view consistency, seenPainted, seam ratio, SAM/MoGe residuals and diagnostic screenshots); if verdict is needs-repair, get human approval for the Critic-gated repair proposal and run potemkin_agent_act again until completed, then hand off externalHooks.blenderMcp or externalHooks.unrealMcp.'}}]}));
   return server;
 }
 if(process.argv[1]&&fs.realpathSync(process.argv[1])===fileURLToPath(import.meta.url)) {

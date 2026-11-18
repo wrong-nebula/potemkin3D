@@ -25,6 +25,12 @@ Potemkin's CLI and stdio MCP server share validated command schemas and one exec
 | `job-cancel` | `potemkin_job_cancel` | Request cancellation. |
 | `runs` | `potemkin_runs` | List generation runs in `runs/`. |
 | `run-info` | `potemkin_run_info` | Summarize one run and its saved files. |
+| `agent-plan` | `potemkin_agent_plan` | Planner stage: emit a look file, `coverageBudget` (and `objectBrief` in object mode), and stage Round 1 awaiting human spend approval. |
+| `agent-approve` | `potemkin_agent_approve` | Human spend gate: authorize a staged initial or Critic-gated repair proposal within the remaining `budgetUsd`. |
+| `agent-act` | `potemkin_agent_act` | Actor + Critic stage: execute the approved round, append `runs/<id>/episodes.ndjson`, score quality, and either gate a targeted repair round or finalize PBR/GLB export + Blender/Unreal MCP hooks. |
+| `agent-critique` | `potemkin_agent_critique` | Run the multi-metric Critic (`critique`) standalone on a saved run with diagnostic screenshots and zero model calls. |
+| `agent-status` | `potemkin_agent_status` | Read a budgeted Planner → Actor → Critic session, pending proposal, episodic trace and external MCP hooks. |
+| `agent-memory` | `potemkin_agent_memory` | Read cross-session memory of material presets, successful configs and repair pattern score gains. |
 
 ## Inputs and outputs
 
@@ -62,7 +68,7 @@ A workflow has `version:1`, `steps` (1–100), `allowPaid:false` by default, and
 | `ao`, `pbr`, `exportPbr`, `nameParts` | Bake AO, generate full PBR channels (`intrinsic` or `patina`), export packed ORM and/or separate linear maps, or name shapes. |
 | `materialPresets`, `materialMaps`, `floorDetail`, `floorDetailEnabled` | Assign presets, import aligned material maps and manage protected floor detail. `floorDetail.options:null` removes the detail layer. |
 | `walk`, `pick`, `snapshot` | Position a walking camera, ray-pick a surface point, or capture a specified camera. `walk.options:null` stops walking. |
-| `selfTest`, `measure`, `validate`, `checkRun`, `promptTest` | Exercise GPU passes, measure sampling, evaluate saved views, check geometry fidelity, compare prompts. Some need a real saved generation record. |
+| `selfTest`, `measure`, `critique`, `validate`, `checkRun`, `promptTest` | Exercise GPU passes, measure sampling, score multi-view consistency/coverage/seams/residuals & prescribe targeted repairs, evaluate saved views, check geometry fidelity, compare prompts. |
 
 Obtain each operation's exact fields from `schema --name workflow` or the `potemkin://schema/workflow` resource. Schemas track the engine API in `src/api.ts`. Interactive demo editing and raw access to `session` remain browser APIs; automation exposes their concrete scene operations instead.
 
@@ -94,8 +100,10 @@ MCP resources:
 - `potemkin://examples/free-luxor`, `potemkin://examples/texture-luxor`, `potemkin://examples/resume-luxor`
 - `potemkin://jobs/<UUID>`
 - `potemkin://jobs/<UUID>/artifacts/<name>`
+- `potemkin://agent/memory`
+- `potemkin://agent/sessions/<UUID>`
 
-Only manifest-listed artifacts can be read through MCP. Inline resources are limited to 8 MiB; larger GLBs remain available at their local paths. The `free-luxor-tour` prompt guides clients through discovery and the free workflow. The server uses the official [TypeScript MCP SDK](https://github.com/modelcontextprotocol/typescript-sdk) and [stdio transport](https://ts.sdk.modelcontextprotocol.io/v2/serving/stdio.html).
+Only manifest-listed artifacts can be read through MCP. Inline resources are limited to 8 MiB; larger GLBs remain available at their local paths. The `free-luxor-tour` prompt guides clients through discovery and the free workflow, and `budgeted-agent-loop` guides clients through the human-gated Planner → Actor → Critic loop and downstream `blender-mcp` / `unreal-mcp` chaining hooks. The server uses the official [TypeScript MCP SDK](https://github.com/modelcontextprotocol/typescript-sdk) and [stdio transport](https://ts.sdk.modelcontextprotocol.io/v2/serving/stdio.html).
 
 ## Verification and troubleshooting
 

@@ -11,6 +11,7 @@ import { workflow, paidSteps, jsonSchema, relativePath, localUrl } from '../auto
 import { startJob, getJob, cancelJob, artifact } from '../automation/jobs.mjs';
 import { preflight } from '../automation/preflight.mjs';
 import { parseCLI } from '../automation/cli.mjs';
+import { agentPlan, agentApprove, agentAct, agentPlanInput, agentApproveInput, agentActInput, buildExternalMcpHooks, readAgentMemory } from '../automation/agent.mjs';
 const dirs=[];
 const temp=()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'potemkin-test-'));dirs.push(d);return d;};
 afterEach(()=>{for(const d of dirs.splice(0))fs.rmSync(d,{recursive:true,force:true});});
@@ -94,5 +95,70 @@ describe('CLI contract',()=>{
     expect(good.status).toBe(0);expect(good.stderr).toBe('');expect(JSON.parse(good.stdout).data.samples.some(s=>s.name==='luxor')).toBe(true);
     const bad=spawnSync(process.execPath,[cli,'plan','--typo','1','--json'],{encoding:'utf8'});
     expect(bad.status).toBe(2);expect(JSON.parse(bad.stdout).error.code).toBe('INVALID_INPUT');
+  });
+});
+
+describe('Planner → Actor → Critic budget, approval & MCP hooks (item 10)',()=>{
+  it('emits look file, coverageBudget and objectBrief, enforces budgetUsd ceiling, and requires human spend approval',async()=>{
+    const root=temp();
+    fs.mkdirSync(path.join(root,'samples'),{recursive:true});
+    fs.copyFileSync(path.join(ROOT,'samples/courtyard.glb'),path.join(root,'samples/rover_prop.glb'));
+    // Seed cross-session memory to verify presets carry across sessions
+    atomicJSON(path.join(root,'.potemkin/agent-memory.json'),{
+      version:1,updatedAt:'2026-01-01T00:00:00Z',
+      presetsByPart:{'material-0':'metal'},
+      successfulConfigs:[],
+      repairPatterns:{topUp:{uses:2,meanScoreDelta:18.4}},
+    });
+
+    // Rejects initial plan when estimated spend exceeds stated budgetUsd
+    expect(()=>agentPlan(agentPlanInput.parse({
+      path:'samples/rover_prop.glb',initialViews:20,budgetUsd:0.05,firstModel:'flux3-klein',fillModel:'flux3-klein',
+    }),{root})).toThrow(/exceeds stated budget/);
+
+    // Object-mode plan emits look.json + objectBrief + awaits human approval
+    const planned=agentPlan(agentPlanInput.parse({
+      path:'samples/rover_prop.glb',
+      mode:'auto',
+      initialViews:4,
+      budgetUsd:0.25,
+      targetTexelDensityPxPerM:280,
+      styleReferences:['refs/chassis.jpg'],
+      animationReady:true,
+      focusParts:['barrel','chassis'],
+    }),{root});
+    expect(planned.mode).toBe('object');
+    expect(planned.status).toBe('awaiting-approval');
+    expect(planned.objectBrief.animationReady).toBe(true);
+    expect(planned.objectBrief.targetTexelDensityPxPerM).toBe(280);
+    expect(planned.coverageBudget.initialViews).toBe(4);
+    expect(planned.memoryApplied.knownRepairPatterns.topUp.uses).toBe(2);
+    expect(fs.existsSync(path.join(root,planned.lookPath))).toBe(true);
+
+    // Refuses to run Actor before human approval
+    await expect(agentAct(agentActInput.parse({sessionId:planned.sessionId}),{root})).rejects.toThrow(/human approval/);
+
+    // Rejects approval if human maxSpendUsd cap is lower than proposal estimate
+    expect(()=>agentApprove(agentApproveInput.parse({
+      sessionId:planned.sessionId,proposalId:planned.pendingProposal.id,maxSpendUsd:0.001,
+    }),{root})).toThrow(/exceeds authorized cap/);
+
+    // Approving transitions session to 'ready' and records episodic approval trace
+    const approved=agentApprove(agentApproveInput.parse({
+      sessionId:planned.sessionId,proposalId:planned.pendingProposal.id,approvedBy:'lead-artist',
+    }),{root});
+    expect(approved.status).toBe('ready');
+
+    // Blender & Unreal MCP chaining hooks carry run artifacts and objectBrief settings
+    const hooks=buildExternalMcpHooks({
+      runId:planned.runId,
+      objectBrief:planned.objectBrief,
+      thresholds:planned.thresholds,
+    });
+    expect(hooks.blenderMcp.server).toBe('blender-mcp');
+    expect(hooks.blenderMcp.arguments.animationReady).toBe(true);
+    expect(hooks.unrealMcp.server).toBe('unreal-mcp');
+    expect(hooks.unrealMcp.arguments.materialWorkflow).toBe('ORM_POM');
+    expect(readAgentMemory(root).repairPatterns.topUp.meanScoreDelta).toBeCloseTo(18.4,1);
   });
 });

@@ -24,7 +24,7 @@ In Luxor, use **WASD** to walk, **Shift** to run, and click or drag to look. **1
 
 ## CLI, MCP and tutorial
 
-The project includes a JSON CLI and a stdio MCP server for agents. Both expose the same schemas, persistent background jobs, progress, cancellation and artifact manifests. Scene inspection, camera planning, screenshots, painting, repairs, material maps, validation and GLB export are available without browser clicking.
+The project includes a JSON CLI and a stdio MCP server for agents. Both expose the same schemas, persistent background jobs, progress, cancellation, artifact manifests, and a budgeted **Planner → Actor → Critic** session loop (`agent-plan` → `agent-approve` → `agent-act`) with human spend gating, episodic run traces, cross-session repair memory and Blender/Unreal MCP chaining hooks. Scene inspection, camera planning, screenshots, painting, repairs, material maps, validation and GLB export are available without browser clicking.
 
 ```sh
 npm ci

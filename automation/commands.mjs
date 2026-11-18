@@ -6,6 +6,13 @@ import { ROOT, AutomationError, inside, readJSON, inspectGlb } from './files.mjs
 import { object, id, jobId, relativePath, workflow, planInput, screenshot, buildInput, paidSteps, jsonSchema } from './schema.mjs';
 import { startJob, getJob, listJobs, cancelJob } from './jobs.mjs';
 import { preflight } from './preflight.mjs';
+import {
+  agentPlan, agentPlanInput,
+  agentApprove, agentApproveInput,
+  agentAct, agentActInput,
+  agentCritique, agentCritiqueInput,
+  agentStatus, readAgentMemory,
+} from './agent.mjs';
 
 const empty=object({});
 export const examples=['free-luxor','texture-luxor','resume-luxor'];
@@ -66,6 +73,12 @@ export const commands={
   'job-status':command('Read job status, step results, artifact manifest and a page of progress events.',object({id:jobId,
     cursor:z.number().int().min(0).default(0),limit:z.number().int().min(0).max(100).default(25)}),({id,...opts})=>getJob(id,opts)),
   'job-cancel':command('Request cooperative cancellation. Completed files remain; an already accepted remote model call may still be billed.',object({id:jobId}),({id})=>cancelJob(id),false),
+  'agent-plan':command('Planner stage of the budgeted Planner → Actor → Critic loop: emit a look file (and object brief in object mode), set coverage/seam targets under a stated budgetUsd, and stage Round 1 awaiting human approval.',agentPlanInput,input=>agentPlan(input),false),
+  'agent-approve':command('Human spend-approval gate: authorize a staged Planner or Critic repair SpendProposal within the remaining session budget before agent-act executes.',agentApproveInput,input=>agentApprove(input),false),
+  'agent-act':command('Actor + Critic stage: execute the approved proposal, record episodic traces in runs/<id>/episodes.ndjson, score multi-view consistency/coverage/seams/residuals, and either gate a targeted repair round or finalize export + Blender/Unreal MCP hooks.',agentActInput,input=>agentAct(input),false),
+  'agent-critique':command('Run the standalone Critic on a saved run (no model calls): coverage, high-rank px/m, cross-view seam ratio, SAM/MoGe residuals, diagnostic screenshots and repair prescriptions.',agentCritiqueInput,input=>agentCritique(input),false),
+  'agent-status':command('Inspect a budgeted Planner → Actor → Critic session, pending spend proposal, episodic trace and Blender/Unreal MCP hooks.',object({sessionId:jobId}),input=>agentStatus(input)),
+  'agent-memory':command('Read cross-session memory of successful material presets, layouts and repair pattern score gains.',empty,()=>readAgentMemory()),
 };
 export async function invoke(name,input={}) {
   const spec=commands[name]; if(!spec)throw new AutomationError('UNKNOWN_COMMAND',`Unknown command: ${name}`);

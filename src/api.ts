@@ -26,6 +26,7 @@ import { MATERIAL_PRESETS, type MaterialAssignments } from './core/material-pres
 import type { AlignedMapSource } from './core/aligned-maps';
 import { validateViews } from './core/validation-engine';
 import type { ConsolidateOptions } from './core/consolidate';
+import { applyScreenshotArtifacts, critiqueRun, scoreDiagnosticFrames, type CriticThresholds } from './core/critic';
 import type { UvRefineOptions } from './core/uv-refine';
 import type { WeightOverlay } from './core/viewer';
 
@@ -493,6 +494,23 @@ export function makeApi(session: Session) {
       return { ...summarise(views, s, e.atlas.coverage(), record.cost),
         seen: { share: island ? seen / island : 0, painted: seen ? painted / seen : 0, filled: seen ? filled / seen : 0 },
         ...(highRank ? { highRank } : {}) };
+    },
+    /** Multi-metric Critic (core/critic.ts): score coverage, sightline sharpness, multi-view consistency, seam ratio, SAM/MoGe residuals, screenshot artifacts & baked shading. */
+    async critique(opts: CriticThresholds & { screenshots?: number } = {}) {
+      const e = session.engine;
+      const record = session.record;
+      if (!e || !record) throw new Error('paint or load a run first');
+      const { screenshots = 1, ...thresholds } = opts;
+      const measured = await this.measure();
+      let report = critiqueRun(e, record, measured, thresholds);
+      const shots = report.diagnosticCameras.slice(0, Math.max(0, Math.min(4, screenshots))).map((cam) =>
+        this.snapshot({ position: cam.position, target: cam.target, fov: cam.fov, width: 512, height: 512, mode: 'textured', overlay: false }),
+      );
+      if (shots.length > 0) {
+        const frames = await Promise.all(shots.map(async (u) => ({ data: await urlToRGBA(u, 512, 512), width: 512, height: 512 })));
+        report = applyScreenshotArtifacts(report, scoreDiagnosticFrames(frames));
+      }
+      return { ...report, screenshots: shots };
     },
     async loadRun(id: string) {
       const meta = await session.loadRun(id);

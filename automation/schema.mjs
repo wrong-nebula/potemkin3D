@@ -97,6 +97,10 @@ export const steps = [
   step('export', { output: filename.optional() }),
   step('selfTest', { views: z.number().int().min(1).max(16).optional() }),
   step('measure'),
+  step('critique', { output: filename.optional(), options: object(optional({
+    minSeenPainted: fraction, minHighRankPxPerM: positive, maxSeamRatio: positive, minMultiViewConsistency: fraction,
+    maxIgnoredShare: fraction, maxBakedShading: fraction, screenshots: z.number().int().min(0).max(4),
+  })).optional() }),
   step('validate', { id, options: object(optional({ size, atlasSize: size, heldOut: z.boolean(), limit: count })).optional() }),
   step('checkRun', { id, threshold: fraction.optional(), planes: z.boolean().optional(), cells: z.boolean().optional() }),
   step('promptTest', { options: object({ run: id, views: z.array(count),
