@@ -28,9 +28,10 @@ export const commands={
     const {chromium}=await import('playwright');
     const executable=process.env.TROMPE_CHROME??chromium.executablePath();
     const {loadEnv}=await import('vite'); const configured=!!(process.env.FAL_KEY||loadEnv('development',ROOT,'FAL_').FAL_KEY);
+    const localModelUrl=process.env.LOCAL_MODEL_URL||loadEnv('development',ROOT,'LOCAL_').LOCAL_MODEL_URL||null;
     const browserInstalled=fs.existsSync(executable);
     return {node:process.versions.node,nodeSupported:(Number(process.versions.node.split('.')[0])>22 || (Number(process.versions.node.split('.')[0])===22 && Number(process.versions.node.split('.')[1])>=12)),
-      browserInstalled,browserSource:process.env.TROMPE_CHROME?'TROMPE_CHROME':'Playwright',falKeyConfigured:configured,
+      browserInstalled,browserSource:process.env.TROMPE_CHROME?'TROMPE_CHROME':'Playwright',falKeyConfigured:configured,localModelUrl,
       scenes:['luxor/index.html','index.html'].every(p=>fs.existsSync(path.join(ROOT,'deploy/potemkin3d',p))),
       next:browserInstalled?'Use plan, screenshot, or job-start.':'Run npx playwright install chromium or set TROMPE_CHROME to an installed Chrome.'};
   }),

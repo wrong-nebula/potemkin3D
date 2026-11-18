@@ -7,6 +7,7 @@ import type { AoOptions } from './core/ao';
 import type { PbrOptions } from './core/pbr';
 import type { PlanOptions } from './core/planner';
 import { configureFal } from './providers/fal';
+import { configureProvider, getProviderConfig, probeLocalBackend, type ProviderOptions } from './providers/router';
 import { DEFAULT_PLAN, plan as makePlan, planStats, samplePlayerPoints } from './core/planner';
 import { objectEyes } from './core/object-plan';
 import { seenCells } from './core/layout';
@@ -50,6 +51,13 @@ export function makeApi(session: Session) {
     session,
     /** Stable binary export for CLI/MCP adapters; does not trigger a browser download. */
     exportGlb: () => session.exportGlb(),
+    /** Configure or inspect the model provider router ('fal' | 'local' | 'auto'), optionally probing local endpoints. */
+    async provider(opts: ProviderOptions & { probe?: boolean } = {}) {
+      const { probe, ...rest } = opts;
+      const cfg = Object.keys(rest).length ? configureProvider(rest) : getProviderConfig();
+      const detected = probe ? await probeLocalBackend(cfg) : undefined;
+      return { ...cfg, ...(probe ? { detected } : {}) };
+    },
     /** Local estimate from bundled model prices, not a live quote or a spending limit. */
     quote(options: Partial<Parameters<typeof quote>[1]> = {}) {
       if (!session.plan || !session.engine) throw new Error('Plan cameras first');

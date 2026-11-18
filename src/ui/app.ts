@@ -1,6 +1,7 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import { MATERIAL_MODEL, MODELS } from '../providers/models';
 import { configureFal } from '../providers/fal';
+import { configureProvider, type ProviderKind } from '../providers/router';
 import { pbrQuote } from '../core/pbr';
 import { DEFAULT_PIPELINE, quote, type PipelineEvent, type PipelineOptions } from '../core/pipeline';
 import hangar from '../../samples/hangar.look.json';
@@ -77,6 +78,25 @@ export function mountUi(session: Session, panel: HTMLElement) {
   });
   const az = h('input', { type: 'range', min: '0', max: '360', value: '140' });
   const el = h('input', { type: 'range', min: '5', max: '85', value: '48' });
+  const providerSel = h('select', { 'aria-label': 'Provider' });
+  for (const [v, l] of [
+    ['fal', 'Provider · Cloud (fal.ai)'],
+    ['local', 'Provider · Local ($0 · ComfyUI / diffusers / Hunyuan3D)'],
+    ['auto', 'Provider · Auto (local → fal fallback)'],
+  ]) providerSel.append(h('option', { value: v }, l));
+  const localUrlInput = h('input', { type: 'text', placeholder: 'Local server URL (optional, e.g. http://127.0.0.1:8188)' });
+  localUrlInput.value = localStorage.getItem('trompe.localUrl') ?? '';
+  const syncProvider = () => {
+    const prov = providerSel.value as ProviderKind;
+    if (localUrlInput.value.trim()) localStorage.setItem('trompe.localUrl', localUrlInput.value.trim());
+    else localStorage.removeItem('trompe.localUrl');
+    return configureProvider({
+      provider: prov,
+      providerFallback: prov === 'auto' ? 'fal' : 'none',
+      localUrl: localUrlInput.value.trim() || undefined,
+    });
+  };
+  providerSel.onchange = localUrlInput.onchange = () => { syncProvider(); };
   const firstSel = h('select');
   const fillSel = h('select');
   for (const m of Object.values(MODELS)) {
@@ -190,7 +210,8 @@ export function mountUi(session: Session, panel: HTMLElement) {
       h('div', { class: 'note' }, `${MATERIAL_MODEL.label} predicts height and roughness together. Normals come from that height; presets set each surface's response. Original paint stays intact. Baked normal and roughness maps are exported with the .glb.`)),
     h('section', {}, h('label', {}, 'Display'), segMode, weightsSel, h('label', { class: 'row note' }, camsBox, 'Show cameras'), walkBtn),
     h('section', {}, h('label', {}, 'Export'), consolidateBtn, h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
-    h('section', {}, h('label', {}, 'fal'), key, h('div', { class: 'note' }, 'Empty: uses FAL_KEY from the dev server. A key here is stored in this browser and sent straight to fal.')),
+    h('section', {}, h('label', {}, 'Providers'), providerSel, localUrlInput, key,
+      h('div', { class: 'note' }, 'Local routes to ComfyUI (:8188), diffusers (:8000) or Hunyuan3D-Paint (:8081) at $0. For cloud, empty key uses FAL_KEY from the dev server.')),
     log,
   );
 
@@ -490,9 +511,10 @@ export function mountUi(session: Session, panel: HTMLElement) {
     try {
       const p = session.makePlan(planOpts());
       // the quote, before anything is spent: the most these views can cost and about how long they take
+      const provCfg = syncProvider();
       const q = quote(p, { firstModel: firstSel.value, fillModel: fillSel.value, holes: planOpts().holes,
         secondGoes: checkBox.checked ? DEFAULT_PIPELINE.checkRetries : 0, planes: checkBox.checked && planesBox.checked,
-        viewSize: session.engine?.size });
+        viewSize: session.engine?.size, provider: provCfg.provider, providerFallback: provCfg.providerFallback });
       vViews.textContent = String(p.views.length);
       vCov.textContent = `${Math.round(100 * p.predicted[p.predicted.length - 1])}%`;
       vCost.textContent = `≤${money(q.cost)}`;
@@ -532,10 +554,12 @@ export function mountUi(session: Session, panel: HTMLElement) {
     };
     savedAs = canSave ? `${session.level!.name.replace(/[^\w.-]+/g, '-')}-${Date.now().toString(36)}` : undefined;
     if (savedAs) say(`saving to runs/${savedAs}/ as it paints`);
+    const provCfg = syncProvider();
     try {
       await session.run({ style: style.value, roofStyle: roofStyle.value, floorStyle: floorStyle.value, firstModel: firstSel.value, fillModel: fillSel.value,
         ...(SAMPLES.find((x) => x.url === sample.value && x.name === session.level?.name)?.look ?? {}),
-        check: checkBox.checked, checkPlanes: planesBox.checked, styleReference: swatchBox.checked, plan: planOpts() }, onEvent, savedAs);
+        check: checkBox.checked, checkPlanes: planesBox.checked, styleReference: swatchBox.checked, plan: planOpts(),
+        provider: provCfg.provider, providerFallback: provCfg.providerFallback, localUrl: provCfg.localUrl }, onEvent, savedAs);
       setMode('textured');
     } catch (e) {
       say(String(e));

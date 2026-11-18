@@ -17,7 +17,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { fillColours } from './core/finish';
 import { consolidateViews, type ConsolidateOptions } from './core/consolidate';
 import { matchCorners, partMesh, pickParts, toGlb, type PartMesh, type PartStats } from './core/partpass';
-import { runEdit, runRetexture } from './providers/fal';
+import { routeEdit, routeRetexture, mergeProviderOptions, type ProviderOptions } from './providers/router';
 import { PAINTED, PART_QUALITY } from './core/atlas';
 import { DEFAULT_GROUND, GROUND_QUALITY, TILE_VARIANTS, edgeField, floorHeight, isGround, matchTiles, meanColour, tileGrain, toneField, type GroundOptions } from './core/ground';
 import { bitmapToRGBA, toCanvas, toDataUrl } from './core/image';
@@ -517,6 +517,19 @@ export class Session {
   }
 
   /** Textured GLB of the level (unlit material with the baked texture). */
+  private runProvider(o?: Partial<PipelineOptions>): ProviderOptions {
+    const src = o ?? this.record?.options;
+    return mergeProviderOptions(src ? {
+      provider: src.provider,
+      providerFallback: src.providerFallback,
+      localBackend: src.localBackend,
+      localUrl: src.localUrl,
+      localModel: src.localModel,
+      localWorkflow: src.localWorkflow,
+      localTail: src.localTail,
+    } : undefined);
+  }
+
   /**
    * The part pass (core/partpass.ts): texture on their own the parts the painting left much of unpainted, and copy
    * each into the level's texture. One model call a part.
@@ -558,16 +571,17 @@ export class Session {
       // a still of the part as the room's views painted it, when they painted enough of it to show its look
       const s = stats[label]!;
       const still = s.seen && s.unpainted / s.seen < 0.6 ? this.partStill(m) : undefined;
-      const r = await runRetexture(toGlb(m.position, m.normal), `${name}, as found in ${look}. The whole object is this one thing: ${name}. ` +
-        'Realistic materials, evenly lit, no shadows or highlights painted in, no lettering, stencils, labels or logos.', this.abort?.signal, still);
+      const r = await routeRetexture(toGlb(m.position, m.normal), `${name}, as found in ${look}. The whole object is this one thing: ${name}. ` +
+        'Realistic materials, evenly lit, no shadows or highlights painted in, no lettering, stencils, labels or logos.', this.abort?.signal, still, this.runProvider());
       const file = `part_${name.replace(/[^a-z0-9]+/gi, '_')}.glb`;
       if (saveAs) await this.put(saveAs, file, new Blob([r.glb], { type: 'model/gltf-binary' }));
       // made to match a still of the room, the texture can stand for the whole part; made from words alone it only fills gaps
       const applied = await this.applyPart(label, r.glb, still ? 'auto' : 'gaps');
-      record.cost += PART_MODEL.price;
+      const partPrice = r.providerUsed === 'local' ? 0 : PART_MODEL.price;
+      record.cost += partPrice;
       record.partPass = (record.partPass ?? []).filter((p) => p.name !== name);   // a part done again replaces its earlier texture
-      record.partPass.push({ name, file, price: PART_MODEL.price, exact: applied.exact, still: !!still });
-      done.push({ name, price: PART_MODEL.price, seconds: r.seconds, unpainted: stats[label]?.seen ? stats[label]!.unpainted / stats[label]!.seen : 0, exact: applied.exact });
+      record.partPass.push({ name, file, price: partPrice, exact: applied.exact, still: !!still });
+      done.push({ name, price: partPrice, seconds: r.seconds, unpainted: stats[label]?.seen ? stats[label]!.unpainted / stats[label]!.seen : 0, exact: applied.exact });
       onProgress?.(`${name}: textured in ${r.seconds.toFixed(0)} s${applied.exact ? '' : ' (its triangles came back changed: matched by position)'}`);
     }
     this.viewer?.setMode('textured');
@@ -688,18 +702,20 @@ export class Session {
       const still = opts.reference === false ? undefined : this.groundStill();
       if (still && saveAs) await this.put(saveAs, 'ground_reference.jpg', await (await fetch(still)).blob());
       const tiles: Uint8ClampedArray[] = [];
+      let paid = 0;
+      const prov = this.runProvider();
       for (let k = 0; k < count; k++) {
         onProgress?.(`painting ground tile ${k + 1}/${count}: ${style}`);
-        const r = await runEdit(model, k === 0
+        const r = await routeEdit(model, k === 0
           ? { imageUrl: toDataUrl(flat, size, size, 'image/jpeg', 0.9), prompt: { ...prompt, reference: !!still }, swatchUrl: still, seed: seed + k, size }
           : { imageUrl: toDataUrl(tiles[0], size, size, 'image/jpeg', 0.92), prompt: { ...prompt, variant: TILE_VARIANTS[k] ?? '' }, seed: seed + k, size },
-        this.abort.signal);
+        this.abort.signal, prov);
         tiles.push(bitmapToRGBA(r.image, size, size));
+        if (r.providerUsed !== 'local') paid += priceOf(model, size);
       }
       this.groundTiles = matchTiles(tiles);
       files = this.groundTiles.map((_, k) => `ground_${k}.png`);
       if (saveAs) for (let k = 0; k < files.length; k++) await this.put(saveAs, files[k], await toBlob(this.groundTiles[k], size, size, 'image/png'));
-      const paid = count * priceOf(model, size);
       record.cost += paid;
       price += paid;
     }
@@ -825,7 +841,7 @@ export class Session {
     if (!e || !level || !record) throw new Error('paint or load a run first');
     this.abort = new AbortController();
     const S = e.size, model = MODELS.h3;
-    const done: { text: string; seconds: number }[] = [];
+    const done: { text: string; seconds: number; price: number }[] = [];
     const up = new THREE.Vector3(0, 1, 0), ray = new THREE.Ray();
     for (const note of pinNotes(notes, level.geometry, level.bvh)) {
       if (this.abort.signal.aborted) break;
@@ -845,8 +861,8 @@ export class Session {
       if (!seen?.well) { onProgress?.(`"${note.text}": its spot cannot be seen whole from above, left out`); continue; }
       onProgress?.(`ground note: ${note.text}`);
       const prompt = groundNotePrompt(record.options.floorStyle);
-      const r = await runEdit({ ...model, input: (i) => ({ ...model.input(i), prompt }) },
-        { imageUrl: toDataUrl(drawNotes(state, S, [seen]), S, S, 'image/jpeg', 0.95), prompt: { look: '', roofLook: '', parts: '', mode: 'floor', floor: true }, seed: 7, size: S }, this.abort.signal);
+      const r = await routeEdit({ ...model, input: (i) => ({ ...model.input(i), prompt }) },
+        { imageUrl: toDataUrl(drawNotes(state, S, [seen]), S, S, 'image/jpeg', 0.95), prompt: { look: '', roofLook: '', parts: '', mode: 'floor', floor: true }, seed: 7, size: S }, this.abort.signal, this.runProvider());
       const gen = bitmapToRGBA(r.image, S, S);
       const ground = new Uint8Array(S * S);
       for (let i = 0; i < ground.length; i++) ground[i] = nrm[4 * i + 3] > 0.5 && nrm[4 * i + 1] > 0.7 ? 1 : 0;
@@ -858,10 +874,10 @@ export class Session {
         await this.put(saveAs, file.replace('.png', '_gen.jpg'), await toBlob(gen, S, S, 'image/jpeg', 0.9));
       }
       e.paint(spec, comp, NOTE_DETAIL);
-      const price = priceOf(model, S);
+      const price = r.providerUsed === 'local' ? 0 : priceOf(model, S);
       record.cost += price;
       record.groundNotes = [...(record.groundNotes ?? []).filter((n) => n.file !== file), { text: note.text, spec, file, price }];
-      done.push({ text: note.text, seconds: r.seconds });
+      done.push({ text: note.text, seconds: r.seconds, price });
     }
     // what came after the ground goes back over it: part textures and the fill
     for (const p of record.partPass ?? []) {
@@ -870,7 +886,7 @@ export class Session {
     }
     if (record.finished) this.finish();
     this.viewer?.setMode('textured');
-    return { notes: done, cost: done.length * priceOf(model, S) };
+    return { notes: done.map(({ text, seconds }) => ({ text, seconds })), cost: done.reduce((t, d) => t + d.price, 0) };
   }
 
   /**
@@ -953,11 +969,11 @@ export class Session {
       p.prompt = { ...p.prompt, mode: 'fill', shapes: true, plain: false, parts: names, ...(p.notes?.length ? { notes: region.text } : { notes: undefined }) };
       onProgress?.(`repair: ${region.text ?? names} (${(100 * pixels / (S * S)).toFixed(0)}% of the picture)`);
       if (dry) { const n = Math.min(1536, S); sent.push(toDataUrl(resizeRGBA(p.sent ?? p.state, S, S, n), n, n, 'image/jpeg', 0.85)); continue; }
-      const r = await generateView(p, S, o.seed + index, o.feather, this.abort.signal);
+      const r = await generateView(p, S, o.seed + index, o.feather, this.abort.signal, undefined, undefined, undefined, undefined, this.runProvider());
       const detail = NOTE_DETAIL * Math.max(1, region.again ?? 1);
       e.paint(spec, r.comp, detail);
-      const price = priceOf(model, S);
-      const view: ViewRecord = { index, wave: Math.max(-1, ...record.views.map((v) => v.wave)) + 1, spec, model: model.key, first: false,
+      const price = r.providerUsed === 'local' ? 0 : priceOf(model, S);
+      const view: ViewRecord = { index, wave: Math.max(-1, ...record.views.map((v) => v.wave)) + 1, spec, model: model.key, provider: r.providerUsed, first: false,
         unknownFraction: pixels / (S * S), prompt: promptText(p), left: r.left, seconds: r.seconds, price, detail, notes: [region.text ?? `repair: ${names}`],
         clay: p.clay, state: p.sent ?? p.state, edit: p.edit, gen: r.gen, comp: r.comp, coverage: e.atlas.coverage(), predicted: 0 };
       record.views.push(view);
@@ -1084,10 +1100,10 @@ export class Session {
         const paid = !!saveAs && (await Promise.all(panels.map(({ p }) => fetch(`/runs/${saveAs}/view_${p.spec.id}_gen.jpg`, { method: 'HEAD' })
           .then((res) => res.ok && (res.headers.get('content-type') ?? '').startsWith('image/'), () => false)))).every(Boolean);
         if (paid) onProgress?.(`${name}: its ${n} sides are on disk from a pass that was cut short`);
-        const r = paid ? undefined : await runEdit({ ...model, input: (i) => ({ ...model.input(i), prompt }) },
-          { imageUrl: sheet.toDataURL('image/jpeg', 0.93), ...(film?.length ? { styleUrls: film } : {}), prompt: { look: '', roofLook: '', parts: '', mode: 'fill', floor: false }, seed: o.seed, size: 2 * S }, this.abort.signal);
+        const r = paid ? undefined : await routeEdit({ ...model, input: (i) => ({ ...model.input(i), prompt }) },
+          { imageUrl: sheet.toDataURL('image/jpeg', 0.93), ...(film?.length ? { styleUrls: film } : {}), prompt: { look: '', roofLook: '', parts: '', mode: 'fill', floor: false }, seed: o.seed, size: 2 * S }, this.abort.signal, this.runProvider());
         const big = r && bitmapToRGBA(r.image, 2 * S, 2 * S);
-        const price = (priceOf(model, 2 * S) + (film?.length ?? 0) * (model.imagePrice ?? 0)) / n;
+        const price = r?.providerUsed === 'local' ? 0 : (priceOf(model, 2 * S) + (film?.length ?? 0) * (model.imagePrice ?? 0)) / n;
         for (const [k, { p, mask, pixels }] of panels.entries()) {
           const ox = (k % 2) * S, oy = Math.floor(k / 2) * S;
           const gen = big ? new Uint8ClampedArray(4 * S * S) : await urlToRGBA(`/runs/${saveAs}/view_${p.spec.id}_gen.jpg`, S, S);
@@ -1150,10 +1166,10 @@ export class Session {
         p.model = model;
         p.prompt = { ...p.prompt, mode: 'fill', shapes: true, plain: false, parts: name, notes: name, references: refs.length || undefined };
         onProgress?.(`${name}: angle ${mine.length + 1} of ${cams.length}`);
-        const r = await generateView(p, S, o.seed + index, o.feather, this.abort.signal, undefined, undefined, refs);
+        const r = await generateView(p, S, o.seed + index, o.feather, this.abort.signal, undefined, undefined, refs, undefined, this.runProvider());
         e.paint(spec, r.comp, PROP_DETAIL);
-        const price = priceOf(model, S) + refs.length * REFERENCE_PRICE;
-        const view: ViewRecord = { index, wave: Math.max(-1, ...record.views.map((v) => v.wave)) + 1, spec, model: model.key, first: false,
+        const price = r.providerUsed === 'local' ? 0 : priceOf(model, S) + refs.length * REFERENCE_PRICE;
+        const view: ViewRecord = { index, wave: Math.max(-1, ...record.views.map((v) => v.wave)) + 1, spec, model: model.key, provider: r.providerUsed, first: false,
           unknownFraction: pixels / (S * S), prompt: promptText(p), left: r.left, seconds: r.seconds, price, detail: PROP_DETAIL, notes: [name],
           clay: p.clay, state: p.sent, edit: p.edit, gen: r.gen, comp: r.comp, coverage: e.atlas.coverage(), predicted: 0 };
         record.views.push(view);

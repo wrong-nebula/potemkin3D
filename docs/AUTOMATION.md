@@ -53,8 +53,9 @@ A workflow has `version:1`, `steps` (1–100), `allowPaid:false` by default, and
 
 | Operations | Use |
 | --- | --- |
+| `provider` | Select or probe the model provider router (`fal`, `local` on loopback ComfyUI/diffusers/Hunyuan3D-Paint, or `auto` with fallback). |
 | `load`, `loadRun`, `loadSentoFloor` | Start a scene, restore a saved run, or load the prepared Sento floor. |
-| `bounds`, `plan`, `quote`, `projection` | Inspect geometry, choose cameras, estimate bundled model cost, control projection thresholds. `quote` requires a plan. |
+| `bounds`, `weights`, `paths`, `plan`, `quote`, `projection` | Inspect geometry, surface weights, player-path bot gaze ranks, choose cameras, estimate model cost, control projection thresholds. `quote` requires a plan. |
 | `run`, `topUp` | Paint a new run or continue one; `saveAs` is required. |
 | `parts`, `ground`, `repair`, `groundNotes`, `props` | Target parts, floor tiles, regions, pinned notes or individual props. |
 | `finish`, `save`, `export` | Fill unpainted slivers, persist a generation record, export the current GLB. `save` needs a real run; `export` also works after a clay self-test. |
@@ -71,7 +72,7 @@ Obtain each operation's exact fields from `schema --name workflow` or the `potem
 
 ## Paid work and connectivity
 
-The following require `allowPaid:true`: `run`, `topUp`, `parts`, `groundNotes`, `pbr`, `nameParts`, `promptTest`, `ground` without `reuse:true`, `props` without `dry:true`, `repair` without `dry:true`, and `checkRun` with `planes:true`. `promptTest` is conservatively classified as paid even in dry mode because it can include an extra roof pass. The worker also blocks browser requests to the fal proxy/provider in free workflows.
+The following require `allowPaid:true` when routed to cloud models (`provider:'fal'`, `provider:'auto'`, or `providerFallback:'fal'`): `run`, `topUp`, `parts`, `groundNotes`, `pbr`, `nameParts`, `promptTest`, `ground` without `reuse:true`, `props` without `dry:true`, `repair` without `dry:true`, and `checkRun` with `planes:true`. Strict local paint/retexture steps (`provider:'local'` with `providerFallback:'none'`) quote `$0` for paint and run without `allowPaid:true` (`localUrl` is restricted to loopback). The worker blocks browser requests to the fal proxy/provider whenever `allowPaid` is `false`.
 
 `FAL_KEY` stays in the local environment or ignored `.env.local`. The local Vite proxy supplies the credential; it is not an MCP argument or workflow field. `allowPaid:true` is an opt-in, **not a budget cap**. `quote` uses bundled prices and excludes some auxiliary calls. Provider billing may continue for a request already accepted when you cancel.
 

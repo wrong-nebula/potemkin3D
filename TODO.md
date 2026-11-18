@@ -18,15 +18,15 @@ Paper references in the source notes have not been checked yet (in particular "L
 
 **Done when:** an un-UV'd GLB textures end to end through the CLI, and `measure.mjs` px/m on an unwrapped sample is within ~10% of its hand-unwrapped version. Add a test alongside `layout.test.ts` / `cut.test.ts`.
 
-## 2. Local model provider router
+## 2. ~~Local model provider router~~ (done: `src/providers/local.ts`, `src/providers/router.ts`, `--provider local|fal|auto`)
 
 **Why:** "No local models yet" is a known limit, with a ComfyUI provider as the next step. It also makes every experiment below cheaper to iterate on.
 
-- Add a provider interface next to `src/providers/fal.ts`, covering the `EditModel` shape in `models.ts`. Back it with local endpoints: diffusers, ComfyUI workflows (FLUX-based multi-view texturing nodes) and Hunyuan3D-Paint.
-- Route per job: local for privacy, cost or offline runs, cloud for higher-capacity models, with fallback. Expose the choice in the CLI/MCP schema (`automation/schema.mjs`).
-- Geometry checks, projection, material separation and resume/repair stay unchanged.
-
-**Done when:** a full sample run completes with `--provider local`, without fal (except optional SAM/MoGe), and quotes $0 for paint.
+- **Provider interface & local backends (`src/providers/router.ts`, `src/providers/local.ts`, `/api/local/proxy`).** Added `ModelProvider` (`falProvider` + `localProvider`) covering `EditModel`, part/object GLB retexturing and optional VLM naming across:
+  - **ComfyUI (`:8188`):** `/upload/image` + FLUX multi-view `ReferenceLatent` / `InpaintModelConditioning` graph builder (`buildComfyWorkflow`, plus custom workflow JSON templates) + `/prompt` / `/history` / `/view`, plus `local-comfy-mv` and `local-flux` model entries.
+  - **Diffusers / OpenAI-Images / SD-WebUI (`:8000`):** `/v1/images/edits`, `/edit` and `/sdapi/v1/img2img` with multi-reference images and masks.
+  - **Hunyuan3D-Paint (`:8081`):** `/paint_view` view editing plus `/retexture` / `/generate` 3D mesh retexturing (`partPass`), plus `hunyuan3d-paint` model entry and an offline `procedural` deterministic painter for zero-daemon pipeline tests.
+- **Per-job routing, fallback & CLI/MCP schema (`automation/schema.mjs`, `scripts/texture.mjs`).** Supports `--provider local|fal|auto`, `--provider-fallback none|fal|local`, `--local-backend`, `--local-url` (loopback-validated against SSRF) and `--local-tail` (routing item 8's `localModelTailViews` locally), plus `provider` workflow steps. Strict `--provider local` quotes `$0` (`paint: 0, cost: 0`), needs no `FAL_KEY`, and runs under `allowPaid: false` with `/api/fal/*` blocked at the browser boundary while keeping in-browser SAM checks, projection, consolidation, resume/repair and GLB export unchanged.
 
 ## 3. Consistency: synchronised views + texture-space consolidation (post-process baseline done: `src/core/consolidate.ts`, `--consolidate`)
 

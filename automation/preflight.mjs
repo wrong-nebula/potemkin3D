@@ -17,7 +17,7 @@ export function preflight(input,root=ROOT) {
       if(!loaded)inside(root,`samples/${meta.level}.glb`);
       loaded=true;planned=true;
     } else if(step.op==='loadSentoFloor') {loaded=true;planned=false;}
-    else if(!loaded)throw new AutomationError('INVALID_WORKFLOW',`${step.op} needs load, loadRun or loadSentoFloor first`);
+    else if(step.op!=='provider' && !loaded)throw new AutomationError('INVALID_WORKFLOW',`${step.op} needs load, loadRun or loadSentoFloor first`);
     if(step.op==='plan')planned=true;
     if(step.op==='quote'&&!planned)throw new AutomationError('INVALID_WORKFLOW','quote needs plan first');
     const run=step.saveAs??(step.op==='save'?step.id:undefined);

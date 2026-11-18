@@ -1,7 +1,8 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { detailOf, GEOMETRY_MODEL, MODELS, priceOf, prompts, type EditModel, type PromptContext, type PromptSetting } from '../providers/models';
-import { runEdit, runGeometry } from '../providers/fal';
+import { runGeometry } from '../providers/fal';
+import { isLocalRoute, mergeProviderOptions, routeEdit, type LocalBackend, type ProviderFallback, type ProviderKind, type ProviderOptions } from '../providers/router';
 import { loadSegmenter } from '../providers/sam';
 import { colorCorrect, dilate, editMask, featherComposite, fraction, keepOnly, maskImage, masksFromState, paintedFromState, untouched,
   type ViewMasks } from './composite';
@@ -107,6 +108,20 @@ export interface PipelineOptions {
    * already named.
    */
   nameParts: boolean;
+  /** Primary inference route per job: 'fal' (cloud default), 'local' ($0 local endpoint), or 'auto' (local if reachable, else fal). */
+  provider?: ProviderKind;
+  /** Fallback route when the primary provider fails or is unreachable ('none' by default so local runs stay offline/free). */
+  providerFallback?: ProviderFallback;
+  /** Local backend protocol: 'auto' probes ComfyUI (:8188), diffusers (:8000) and Hunyuan3D-Paint (:8081). */
+  localBackend?: LocalBackend;
+  /** Base URL of the local inference endpoint (e.g. 'http://127.0.0.1:8188'). */
+  localUrl?: string;
+  /** Optional local checkpoint / model identifier override. */
+  localModel?: string;
+  /** Optional custom ComfyUI API workflow JSON template. */
+  localWorkflow?: Record<string, unknown>;
+  /** Route diminishing-return tail views (`plan.budget.localModelTailViews`) to local while keeping hero views on cloud. */
+  localTail?: boolean;
 }
 
 export const DEFAULT_PIPELINE: PipelineOptions = {
@@ -126,6 +141,8 @@ export interface ViewRecord {
   wave: number;
   spec: ViewSpec;
   model: string;
+  /** Which inference backend actually painted this view ('fal' or 'local'). */
+  provider?: 'fal' | 'local';
   first: boolean;
   unknownFraction: number;
   /** The prompt text sent with this view. */
@@ -456,12 +473,12 @@ export function falPlanes(fov: number, signal?: AbortSignal): Planes {
  * merged into a neighbour, for a view that will have a second go at them (see core/fidelity.ts).
  */
 export async function generateView(p: PreparedView, size: number, seed: number, feather: number, signal?: AbortSignal, check?: Check,
-  swatchUrl?: string, refUrls?: string[], styleUrls?: string[]) {
-  const r = await runEdit(p.model, {
+  swatchUrl?: string, refUrls?: string[], styleUrls?: string[], providerOpts?: ProviderOptions) {
+  const r = await routeEdit(p.model, {
     imageUrl: toDataUrl(p.sent ?? p.state, size, size, 'image/jpeg', 0.95), swatchUrl, refUrls, ...(styleUrls?.length ? { styleUrls } : {}),
     maskUrl: p.model.mask ? toDataUrl(maskImage(p.edit, p.model.mask === 'black'), size, size) : undefined,
     prompt: p.prompt, seed, size,
-  }, signal);
+  }, signal, providerOpts);
   const gen = bitmapToRGBA(r.image, size, size);
   const k = size / 1024;   // pixel radii below are tuned at 1024 px views
   const corrected = colorCorrect(p.state, gen, p.masks, size, size, { band: 6 * k, blur: Math.round(8 * k), falloff: 120 * k });
@@ -477,7 +494,7 @@ export async function generateView(p: PreparedView, size: number, seed: number, 
     const keep = drop ? (p.keep ?? p.geometry).map((v, i) => v & (1 - drop[i])) : p.keep;
     return keep ? keepOnly(comp, keep, p.geometry) : comp;
   };
-  const out = { gen, seconds: r.seconds, expanded: r.expanded, left: nUnknown ? nLeft / nUnknown : 0 };
+  const out = { gen, seconds: r.seconds, expanded: r.expanded, left: nUnknown ? nLeft / nUnknown : 0, providerUsed: r.providerUsed };
   if (check && nUnknown) {
     try {
       const planes: Planes | undefined = check.planes && (async (image, s) => { check.onPlanes?.(); return check.planes!(image, s); });
@@ -499,18 +516,26 @@ export async function generateView(p: PreparedView, size: number, seed: number, 
  * that part of the cost, counted as if every one of them did, and `planes` what the plane test adds at most.
  */
 export function quote(plan: Pick<Plan, 'views' | 'waves'>, o: { firstModel: string; fillModel: string; holes?: number; secondGoes?: number;
-  planes?: boolean; viewSize?: number }) {
+  planes?: boolean; viewSize?: number; provider?: ProviderKind; providerFallback?: ProviderFallback }) {
   const size = o.viewSize ?? 1024;
-  const price = (key: string) => (MODELS[key] ? priceOf(MODELS[key], size) : 0);
+  const eff = mergeProviderOptions({ provider: o.provider, providerFallback: o.providerFallback });
+  const price = (key: string) => {
+    const m = MODELS[key];
+    if (!m || isLocalRoute(eff, m)) return 0;
+    return priceOf(m, size);
+  };
   const first = price(o.firstModel), fill = price(o.fillModel);
   const holes = o.holes ?? 0;
-  let cost = holes * fill;
-  plan.views.forEach((v, i) => { cost += i === 0 || v.kind === 'floor' ? first : v.kind === 'roof' || v.kind === 'fill' ? fill : Math.max(first, fill); });
+  let baseCost = holes * fill;
+  plan.views.forEach((v, i) => { baseCost += i === 0 || v.kind === 'floor' ? first : v.kind === 'roof' || v.kind === 'fill' ? fill : Math.max(first, fill); });
   const goes = (o.secondGoes ?? 0) * plan.views.filter((v) => v.kind !== 'roof' && v.kind !== 'floor').length;
-  // the plane test: at most one geometry-model call per painted view
-  const planes = o.planes ? (plan.views.length + holes + goes) * planePrice(size) : 0;
-  return { views: plan.views.length + holes, cost: cost + goes * fill + planes, again: goes * fill, planes,
-    seconds: 10 * (plan.waves.length + holes + goes) };
+  const again = goes * fill;
+  const paint = baseCost + again;
+  // Strict local runs without cloud fallback skip hosted MoGe-2 unless cloud fallback is enabled.
+  const strictLocal = eff.provider === 'local' && eff.providerFallback !== 'fal';
+  const planes = o.planes && !strictLocal ? (plan.views.length + holes + goes) * planePrice(size) : 0;
+  return { views: plan.views.length + holes, cost: paint + planes, paint, again, planes,
+    seconds: 10 * (plan.waves.length + holes + goes), provider: eff.provider ?? 'fal' };
 }
 
 /** A run being extended (top-up): its views stay as they are and new views continue its numbering. */
@@ -523,15 +548,27 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
   const plan = existingPlan ?? makePlan(engine.gpu, engine.level, engine.views, o.plan, undefined,
     surfaceOf(engine.atlas, o.plan.grid ?? DEFAULT_PLAN.grid));
   onEvent({ type: 'planned', plan, options: o });
+  const jobProvider = mergeProviderOptions({
+    provider: o.provider,
+    providerFallback: o.providerFallback,
+    localBackend: o.localBackend,
+    localUrl: o.localUrl,
+    localModel: o.localModel,
+    localWorkflow: o.localWorkflow,
+    localTail: o.localTail,
+  });
+  const strictLocal = jobProvider.provider === 'local' && jobProvider.providerFallback !== 'fal';
   const S = engine.size;
   const views: ViewRecord[] = [];
   let cost = 0;
   // A level that names nothing gets its shapes named first: the prompts then say what each gray shape is.
+  // In strict local mode on ComfyUI / Hunyuan3D / procedural image backends, skip cloud part naming so $0 runs stay fast and offline.
+  const localHasVlm = jobProvider.localBackend === 'diffusers' && !!jobProvider.localUrl;
   const level = engine.level;
-  if (o.nameParts && level.shapes && level.labels.every((l) => !l) && !signal?.aborted) {
+  if (o.nameParts && (!strictLocal || localHasVlm) && level.shapes && level.labels.every((l) => !l) && !signal?.aborted) {
     try {
       onEvent({ type: 'parts', message: `naming the level's ${level.shapes.length} shapes` });
-      const named = await nameParts(engine, o.style, {}, undefined, signal);
+      const named = await nameParts(engine, o.style, {}, undefined, signal, jobProvider);
       cost += named.cost;
       const list = [...new Set(named.names.filter(Boolean))];
       onEvent({ type: 'parts', names: named.names, message: `named ${named.names.filter(Boolean).length} shapes ($${named.cost.toFixed(2)}): ${list.join(', ')}` });
@@ -583,17 +620,25 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
     const n = Math.min(1024, S);
     painted.push({ index, spec, url: toDataUrl(resizeRGBA(gen, S, S, n), n, n, 'image/jpeg', 0.85) });
   };
-  const generate = (p: PreparedView, index: number) => {
+  const tailStart = jobProvider.localTail && plan.budget?.localModelTailViews
+    ? Math.max(1, plan.views.length - plan.budget.localModelTailViews)
+    : Infinity;
+  const usePlanes = o.checkPlanes && !strictLocal;
+  const generate = (p: PreparedView, index: number, vi?: number) => {
     const site = siteFor(p, siteImages, o.styleMax);
     const swatches = reference(p);
     const refs = p.prompt.mode === 'fill' && p.focus && p.model.maxRefs && o.references > 0
       ? pickReferences(p.focus, painted, Math.min(o.references, p.model.maxRefs), engine.level.bvh) : [];
     p.prompt.references = refs.length || undefined;
     p.refs = refs.map((r) => r.index);
+    const callProvider: ProviderOptions = vi !== undefined && vi >= tailStart
+      ? { ...jobProvider, provider: 'local', providerFallback: jobProvider.providerFallback === 'none' ? 'fal' : jobProvider.providerFallback }
+      : jobProvider;
     // A floor view isn't checked against the blockout: the ground is one face of one material, and the check's
     // segmenter picks out single stones. Only ground pixels of it are projected.
     return withRetry((attempt) => generateView(p, S, o.seed + 1000 * attempt + index, o.feather, signal,
-      p.spec.kind !== 'floor' && check ? { ...check, planes: o.checkPlanes ? falPlanes(p.spec.fov, signal) : undefined, onPlanes: planeCall, cells: o.checkCells } : undefined, swatches, refs.map((r) => r.url), site));
+      p.spec.kind !== 'floor' && check ? { ...check, planes: usePlanes ? falPlanes(p.spec.fov, signal) : undefined, onPlanes: planeCall, cells: o.checkCells } : undefined,
+      swatches, refs.map((r) => r.url), site, callProvider));
   };
   /**
    * What of a checked view goes onto the level. If enough of it was held back and the view has a second go left,
@@ -621,7 +666,7 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
       return p;
     });
     const todo = prepared.filter((p) => !p.skip);
-    const results = await Promise.all(todo.map((p) => generate(p, indexBase + p.vi)
+    const results = await Promise.all(todo.map((p) => generate(p, indexBase + p.vi, p.vi)
       .then((r) => ({ ok: true as const, r }), (e) => ({ ok: false as const, e }))));
     for (let k = 0; k < todo.length; k++) {
       const p = todo[k];
@@ -632,12 +677,13 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
       }
       const kept = settle(p.vi, res.r);
       engine.paint(p.spec, kept.comp, detailOf(p.model, S));
-      cost += viewPrice(p, S);
+      const paidPrice = res.r.providerUsed === 'local' ? 0 : viewPrice(p, S);
+      cost += paidPrice;
       const view: ViewRecord = {
-        index: indexBase + p.vi, wave: waveBase + w, spec: p.spec, model: p.model.key, first: p.isFirst, unknownFraction: p.unknownFraction,
+        index: indexBase + p.vi, wave: waveBase + w, spec: p.spec, model: p.model.key, provider: res.r.providerUsed, first: p.isFirst, unknownFraction: p.unknownFraction,
         prompt: promptText(p), left: res.r.left, ignored: kept.ignored, merged: res.r.merged, swatches: p.prompt.swatches, ...(p.prompt.site ? { site: p.prompt.site } : {}), seconds: res.r.seconds,
         ...(p.notes?.length ? { notes: p.notes.map((n) => n.note.text) } : {}), ...(p.refs?.length ? { references: p.refs } : {}),
-        price: viewPrice(p, S), ...(detailOf(p.model, S) < 1 ? { detail: detailOf(p.model, S) } : {}), clay: p.clay, state: p.sent ?? p.state, edit: p.edit,
+        price: paidPrice, ...(detailOf(p.model, S) < 1 ? { detail: detailOf(p.model, S) } : {}), clay: p.clay, state: p.sent ?? p.state, edit: p.edit,
         gen: res.r.gen, comp: kept.comp, coverage: engine.atlas.coverage(), predicted: plan.predicted[p.vi],
       };
       views.push(view);
@@ -722,14 +768,15 @@ export async function runPipeline(engine: Engine, opts: Partial<PipelineOptions>
       const wave = waveBase + plan.waves.length - 1;
       onEvent({ type: 'view-start', index: indexBase + vi, wave, model: p.model.key, state: p.state });
       try {
-        const r = await generate(p, indexBase + vi);
+        const r = await generate(p, indexBase + vi, vi);
         engine.paint(p.spec, r.comp, detailOf(p.model, S));
-        cost += viewPrice(p, S);
+        const paidPrice = r.providerUsed === 'local' ? 0 : viewPrice(p, S);
+        cost += paidPrice;
         const kind = kindOf(p.spec);
         trust[kind] = 0.5 * trust[kind] + 0.5 * (1 - (r.ignored ?? 0));
         const view: ViewRecord = {
-          index: indexBase + vi, wave, spec: p.spec, model: p.model.key, first: false, unknownFraction: p.unknownFraction,
-          prompt: promptText(p), left: r.left, ignored: r.ignored, merged: r.merged, ...(p.prompt.site ? { site: p.prompt.site } : {}), seconds: r.seconds, price: viewPrice(p, S),
+          index: indexBase + vi, wave, spec: p.spec, model: p.model.key, provider: r.providerUsed, first: false, unknownFraction: p.unknownFraction,
+          prompt: promptText(p), left: r.left, ignored: r.ignored, merged: r.merged, ...(p.prompt.site ? { site: p.prompt.site } : {}), seconds: r.seconds, price: paidPrice,
           ...(p.notes?.length ? { notes: p.notes.map((n) => n.note.text) } : {}), ...(p.refs?.length ? { references: p.refs } : {}), ...(detailOf(p.model, S) < 1 ? { detail: detailOf(p.model, S) } : {}),
           clay: p.clay, state: p.sent ?? p.state, edit: p.edit,
           gen: r.gen, comp: r.comp, coverage: engine.atlas.coverage(), predicted: plan.predicted[vi],

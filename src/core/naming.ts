@@ -1,6 +1,6 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
-import { runVision } from '../providers/fal';
+import { routeVision, type ProviderOptions } from '../providers/router';
 import type { Engine } from './engine';
 import { toDataUrl } from './image';
 import { cleanName } from './parts';
@@ -77,7 +77,7 @@ const question = (look: string) =>
  * @param look the look the level is being textured as (the run's style)
  */
 export async function nameParts(engine: Engine, look: string, opts: Partial<NamingOptions> = {}, onProgress?: (done: number, total: number) => void,
-  signal?: AbortSignal): Promise<NamedParts> {
+  signal?: AbortSignal, providerOpts?: ProviderOptions): Promise<NamedParts> {
   const o = { ...DEFAULT_NAMING, ...opts };
   const { level, gpu } = engine;
   const shapes = level.shapes;
@@ -111,17 +111,19 @@ export async function nameParts(engine: Engine, look: string, opts: Partial<Nami
     probe.stateTarget.dispose();
   }
   const names = shapes.map(() => '');
-  let cost = 0, next = 0, done = 0;
+  let cost = 0, next = 0, done = 0, abortNaming = false, succeeded = 0;
   onProgress?.(0, shots.length);
   const worker = async () => {
-    while (next < shots.length && !signal?.aborted) {
+    while (next < shots.length && !signal?.aborted && !abortNaming) {
       const shot = shots[next++];
       try {
-        const r = await runVision(question(look), [shot.image], signal);
+        const r = await routeVision(question(look), [shot.image], signal, providerOpts);
         names[shot.part] = cleanName(r.text);
-        cost += r.cost;
+        succeeded++;
+        cost += r.providerUsed === 'local' ? 0 : r.cost;
       } catch (e) {
-        if (signal?.aborted) throw e;   // otherwise this one shape stays unnamed
+        if (signal?.aborted) throw e;
+        if (succeeded === 0) abortNaming = true;   // endpoint has no vision model: stop immediately rather than trying 47 more shapes
       }
       onProgress?.(++done, shots.length);
     }

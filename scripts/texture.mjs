@@ -11,6 +11,8 @@
 //     [--paths]      walkable nav-graph + simulated bot gaze importance map weighting layout, camera planning and repairs
 //     [--adaptive]   iterative importance-driven camera planning (geodesic + surface weights + Fisher detail + adaptive lenses)
 //     [--mode auto|level|object] [--focus barrel,face]  discrete prop/character/vehicle mode (enclosing sphere + close-ups)
+//     [--provider fal|local|auto] [--provider-fallback none|fal|local] [--local-backend auto|comfyui|diffusers|hunyuan3d|procedural]
+//                    [--local-url http://127.0.0.1:8188] [--local-model ...]   route image edits locally ($0 paint, no FAL_KEY needed)
 //     [--consolidate] confidence-weighted tangent-flow + Screened-Poisson atlas stitch to remove --parallel view seams (free)
 //     [--layout seen] lay the texture out again so the faces players can see get the texels (the exported GLB carries the new UVs)
 //     [--full]       a clean-up pass, hard parts textured on their own, and the finishing fill (add --floors 12 for plain ground
@@ -95,14 +97,32 @@ const { values: a } = parseArgs({
     'check-retries': { type: 'string', default: '1' },
     'check-threshold': { type: 'string', default: '0.5' },
     'pbr-size': { type: 'string', default: '4096' },
+    provider: { type: 'string' },                 // 'fal' (default), 'local' ($0 paint, no FAL_KEY needed), or 'auto'
+    'provider-fallback': { type: 'string' },      // 'none' (default), 'fal', or 'local'
+    'local-backend': { type: 'string' },          // 'auto' (default), 'comfyui', 'diffusers', 'hunyuan3d', or 'procedural'
+    'local-url': { type: 'string' },              // e.g. 'http://127.0.0.1:8188'
+    'local-model': { type: 'string' },            // local checkpoint / model name override
+    'local-tail': { type: 'boolean', default: false },
   },
 });
-if (!a['plan-only'] && !(await falKey())) {
-  console.error('FAL_KEY is not set (export FAL_KEY=your-fal-key, or put FAL_KEY=... in .env.local)');
-  process.exit(1);
-}
 // A look file stands in for the flags it names; whatever was typed on the command line wins.
 const given = (flag) => process.argv.some((x) => x === `--${flag}` || x.startsWith(`--${flag}=`));
+if (!given('provider') && a.resume) {
+  const fs = await import('node:fs');
+  const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).options;
+  if (saved?.provider) a.provider = saved.provider;
+  if (!given('provider-fallback') && saved?.providerFallback) a['provider-fallback'] = saved.providerFallback;
+  if (!given('local-backend') && saved?.localBackend) a['local-backend'] = saved.localBackend;
+  if (!given('local-url') && saved?.localUrl) a['local-url'] = saved.localUrl;
+  if (!given('local-model') && saved?.localModel) a['local-model'] = saved.localModel;
+}
+const isLocalModelFlag = (m) => typeof m === 'string' && (m.startsWith('local-') || m.startsWith('hunyuan3d'));
+a.provider ??= isLocalModelFlag(a.first) && isLocalModelFlag(a.fill) ? 'local' : 'fal';
+const strictLocal = a.provider === 'local' && a['provider-fallback'] !== 'fal' && !a.pbr;
+if (!a['plan-only'] && !strictLocal && !(await falKey())) {
+  console.error('FAL_KEY is not set (export FAL_KEY=your-fal-key, put FAL_KEY=... in .env.local, or use --provider local)');
+  process.exit(1);
+}
 let look = {};
 if (a.look) {
   look = JSON.parse((await import('node:fs')).readFileSync(a.look, 'utf8'));
@@ -200,10 +220,19 @@ try {
     log(`projection: ${JSON.stringify(await page.evaluate((o) => window.trompe.projection(o),
       { ...(a['min-cos'] ? { minCos: +a['min-cos'] } : {}), ...(a['edge-guard'] ? { edgeGuard: +a['edge-guard'] } : {}), ...(a['frame-margin'] ? { frameMargin: +a['frame-margin'] } : {}) }))}`);
   }
+  const providerOpts = {
+    provider: a.provider,
+    ...(a['provider-fallback'] ? { providerFallback: a['provider-fallback'] } : {}),
+    ...(a['local-backend'] ? { localBackend: a['local-backend'] } : {}),
+    ...(a['local-url'] ? { localUrl: a['local-url'] } : {}),
+    ...(a['local-model'] ? { localModel: a['local-model'] } : {}),
+    ...(a['local-tail'] ? { localTail: true } : {}),
+  };
+  await page.evaluate((p) => window.trompe.provider(p), providerOpts);
   const focusParts = a.focus ? a.focus.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   const planOpts = { maxViews: +a.views, spacing: +a.spacing, aerial: +a.aerial, roofs: +a.roofs, floors: +a.floors, holes: +a.holes, cleanup: +a.cleanup, maxParallel: +a.parallel, objective: a.objective, lookAt: +a['look-at'], ...(a.adaptive ? { adaptive: true } : {}), ...(a.mode !== 'auto' ? { mode: a.mode } : {}), ...(focusParts?.length ? { focusParts } : {}) };
   const opts = { firstModel: a.first, fillModel: a.fill, diffuse: a.diffuse, gapNotes: a['gap-notes'], ...(a['hole-model'] ? { holeModel: a['hole-model'] } : {}), ...(a.references !== undefined ? { references: +a.references } : {}), ...(a.wording ? { wording: a.wording } : {}), ...(a.notes ? { notes: JSON.parse((await import('node:fs')).readFileSync(a.notes, 'utf8')) } : {}), plan: planOpts, nameParts: !a['no-names'], check: !a['no-check'], checkPlanes: !a['no-planes'], checkCells: a['check-cells'], ...(look.setting ? { setting: look.setting } : {}), ...(look.styleImages ? { styleImages: look.styleImages } : {}), ...(look.styleMax ? { styleMax: look.styleMax } : {}), styleReference: a['style-reference'], checkRetries: +a['check-retries'], checkThreshold: +a['check-threshold'], ...(a.style ? { style: a.style } : {}),
-  ...(a['roof-style'] ? { roofStyle: a['roof-style'] } : {}), ...(a['floor-style'] ? { floorStyle: a['floor-style'] } : {}) };
+  ...(a['roof-style'] ? { roofStyle: a['roof-style'] } : {}), ...(a['floor-style'] ? { floorStyle: a['floor-style'] } : {}), ...providerOpts };
   if (a.resume) {
     log(`resuming ${JSON.stringify(await page.evaluate((r) => window.trompe.loadRun(r), a.resume))}`);
     // keep the run's look unless told otherwise
@@ -220,6 +249,16 @@ try {
   } else {
     const plan = await page.evaluate((o) => window.trompe.plan(o), planOpts);
     log(`plan: ${JSON.stringify(plan)}`);
+    const q = await page.evaluate((o) => window.trompe.quote(o), {
+      firstModel: opts.firstModel,
+      fillModel: opts.fillModel,
+      holes: planOpts.holes,
+      secondGoes: opts.check ? opts.checkRetries : 0,
+      planes: opts.check && opts.checkPlanes,
+      provider: providerOpts.provider,
+      ...(providerOpts.providerFallback ? { providerFallback: providerOpts.providerFallback } : {}),
+    });
+    log(`quote: ${JSON.stringify(q)}`);
   }
   if (!a['plan-only']) {
     const res = await page.evaluate((o) => (o.resume ? window.trompe.topUp(o.opts, undefined, o.id) : window.trompe.run(o.opts, undefined, o.id)),

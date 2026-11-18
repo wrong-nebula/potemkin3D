@@ -41,6 +41,8 @@ export interface EditModel {
   imagePrice?: number;
   /** The model carries out notes drawn onto the render it is sent, and leaves none of the writing (core/notes.ts). */
   readsNotes?: boolean;
+  /** Built-in local backend affinity for local zero-cost models (providers/local.ts). */
+  localBackend?: 'auto' | 'comfyui' | 'diffusers' | 'hunyuan3d' | 'procedural';
   /** The prompt this model is sent, when it is not one of the two standard wordings as they are. */
   text?(c: PromptContext): string;
   input(i: EditInput): Record<string, unknown>;
@@ -519,6 +521,21 @@ export const MODELS: Record<string, EditModel> = {
     key: 'flux3', label: 'FLUX 3', endpoint: 'blackforestlabs/flux-3/edit-image', mask: null, price: 0.048,
     input: (i) => ({ prompt: prompts.instruction(i.prompt), image_urls: [i.imageUrl],
       aspect_ratio: '1:1', resolution: '1k', output_format: 'png', enable_prompt_expansion: false }),
+  },
+  'local-flux': {
+    key: 'local-flux', label: 'Local FLUX (Diffusers / ComfyUI)', endpoint: 'local/flux-edit', mask: null, price: 0,
+    maxStyle: 3, maxRefs: 2, localBackend: 'auto',
+    input: (i) => ({ prompt: prompts.caption(i.prompt), image: i.imageUrl, seed: i.seed, width: i.size, height: i.size }),
+  },
+  'local-comfy-mv': {
+    key: 'local-comfy-mv', label: 'Local ComfyUI FLUX Multi-View', endpoint: 'local/comfyui-flux-mv', mask: 'white', price: 0,
+    maxStyle: 4, maxRefs: 3, localBackend: 'comfyui',
+    input: (i) => ({ prompt: prompts.instruction(i.prompt), image: i.imageUrl, mask: i.maskUrl, seed: i.seed, width: i.size, height: i.size }),
+  },
+  'hunyuan3d-paint': {
+    key: 'hunyuan3d-paint', label: 'Local Hunyuan3D-Paint', endpoint: 'local/hunyuan3d-paint', mask: null, price: 0,
+    maxStyle: 2, maxRefs: 2, localBackend: 'hunyuan3d',
+    input: (i) => ({ prompt: prompts.caption(i.prompt), image: i.imageUrl, seed: i.seed, width: i.size, height: i.size }),
   },
 };
 

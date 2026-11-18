@@ -5,6 +5,22 @@ import path from 'node:path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
 const FAL_HOST = /(^|\.)fal\.(ai|run|media)$/;
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/;
+
+function allowedLocalTarget(raw: string): URL | null {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (LOOPBACK_HOST.test(u.hostname)) return u;
+    if (process.env.LOCAL_MODEL_URL) {
+      const cfg = new URL(process.env.LOCAL_MODEL_URL);
+      if (u.hostname === cfg.hostname && u.port === cfg.port) return u;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 async function body(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -107,6 +123,31 @@ function falProxy(): Plugin {
           res.end(Buffer.from(await r.arrayBuffer()));
         } catch (e) {
           fail(res, 502, `media fetch error: ${(e as Error).message}`);
+        }
+      });
+      // CORS-free passthrough for local inference servers (ComfyUI :8188, diffusers :8000, Hunyuan3D-Paint :8081).
+      // Strictly restricted to loopback or an explicit server-configured LOCAL_MODEL_URL host.
+      server.middlewares.use('/api/local/proxy', async (req, res) => {
+        const raw = new URL(req.url ?? '', 'http://x').searchParams.get('url');
+        const target = raw ? allowedLocalTarget(raw) : null;
+        if (!target) return fail(res, 403, 'local proxy only allows loopback or LOCAL_MODEL_URL');
+        const headers: Record<string, string> = {};
+        for (const k of ['content-type', 'accept', 'authorization'] as const) {
+          if (typeof req.headers[k] === 'string') headers[k] = req.headers[k];
+        }
+        const method = req.method ?? 'GET';
+        try {
+          const r = await fetch(target, {
+            method,
+            headers,
+            body: method === 'GET' || method === 'HEAD' ? undefined : new Uint8Array(await body(req)),
+          });
+          res.statusCode = r.status;
+          const ct = r.headers.get('content-type');
+          if (ct) res.setHeader('content-type', ct);
+          res.end(Buffer.from(await r.arrayBuffer()));
+        } catch (e) {
+          fail(res, 502, `local proxy error: ${(e as Error).message}`);
         }
       });
     },

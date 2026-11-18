@@ -28,6 +28,18 @@ export const planOptions = object(optional({
 }));
 const note = object({ text, at: vector, size: positive.optional(), to: vector.optional() });
 const setting = object(optional({ place: text, carriers: text, details: text, additions: z.array(text), materials: text, fill: text, ground: text, light: text }));
+const providerKind = z.enum(['fal','local','auto']);
+const providerFallback = z.enum(['none','fal','local']);
+const localBackend = z.enum(['auto','comfyui','diffusers','hunyuan3d','procedural']);
+export const localUrl = z.string().min(1).max(300).refine(raw => {
+  try {
+    const u = new URL(raw);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && /^(127\.0\.0\.1|localhost|::1|\[::1\])$/.test(u.hostname);
+  } catch { return false; }
+}, 'Use an http(s) loopback URL (127.0.0.1, localhost or ::1)');
+export const providerOptions = object(optional({
+  provider: providerKind, providerFallback, localBackend, localUrl, localModel: text, localTail: z.boolean(), probe: z.boolean(),
+}));
 export const pipelineOptions = object(optional({
   style: text, roofStyle: text, floorStyle: text, references: count, holeModel: text, gapNotes: z.boolean(),
   notes: z.array(note), plainFills: z.boolean(), diffuse: z.boolean(),
@@ -36,6 +48,7 @@ export const pipelineOptions = object(optional({
   mostlyNew: fraction, feather: number.min(0).max(256), seed: z.number().int(), plan: planOptions,
   check: z.boolean(), checkThreshold: fraction, checkRetries: count, retryAbove: fraction, minFresh: fraction,
   checkPlanes: z.boolean(), checkCells: z.boolean(), styleReference: z.boolean(), nameParts: z.boolean(),
+  provider: providerKind, providerFallback, localBackend, localUrl, localModel: text, localTail: z.boolean(),
 }));
 const weightOverlay = z.enum(['off','openness','curvature','light','class','importance','paths']);
 const loadOptions = object(optional({ lighting: z.enum(['overcast','outdoor','indoor','indoor-soft']),
@@ -47,10 +60,11 @@ const camera = object({ position: vector, target: vector, ...optional({ fov: num
   width: size, height: size, mode: z.enum(['clay','textured','lit']), overlay: z.boolean(), weights: weightOverlay }) });
 const step = (op, fields = {}) => object({ op: z.literal(op), ...fields });
 export const steps = [
+  step('provider', { options: providerOptions.optional() }),
   step('load', { path: relativePath.optional(), look: relativePath.optional(), options: loadOptions.optional() }),
   step('loadRun', { id }), step('loadSentoFloor'), step('bounds'), step('weights', { overlay: weightOverlay.optional() }), step('paths'),
   step('plan', { options: planOptions.optional() }),
-  step('quote', { options: object(optional({firstModel:text,fillModel:text,holes:count,secondGoes:count,planes:z.boolean(),viewSize:size})).optional() }),
+  step('quote', { options: object(optional({firstModel:text,fillModel:text,holes:count,secondGoes:count,planes:z.boolean(),viewSize:size,provider:providerKind,providerFallback})).optional() }),
   step('projection', { options: object(optional({ minCos: fraction, edgeGuard: count, frameMargin: number.min(0).max(.49) })) }),
   step('run', { saveAs: id, options: pipelineOptions.optional() }),
   step('topUp', { saveAs: id, options: pipelineOptions.optional() }),
@@ -96,8 +110,25 @@ export const planInput = object({ sample: id.default('luxor'), views: z.number()
   atlas: size.default(1024), viewSize: size.default(512), layout: z.enum(['file','seen','near']).default('file') });
 export const buildInput = object({ target: z.enum(['author','scenes']).default('scenes'), timeoutSeconds: z.number().int().min(10).max(3600).default(600) });
 export function paidSteps(input) {
-  return input.steps.filter(s => ['run','topUp','parts','groundNotes','pbr','nameParts','promptTest'].includes(s.op) ||
-    (s.op === 'ground' && !s.options?.reuse) || (s.op === 'props' && !s.options?.dry) ||
-    (s.op === 'repair' && !s.dry) || (s.op === 'checkRun' && s.planes)).map(s => s.op);
+  let activeProvider = 'fal', activeFallback = 'none';
+  const out = [];
+  for (const s of input.steps) {
+    if (s.op === 'provider') {
+      if (s.options?.provider) activeProvider = s.options.provider;
+      if (s.options?.providerFallback) activeFallback = s.options.providerFallback;
+      continue;
+    }
+    const stepProv = s.options?.provider ?? activeProvider;
+    const stepFb = s.options?.providerFallback ?? activeFallback;
+    const strictLocal = stepProv === 'local' && stepFb !== 'fal';
+    if (['run','topUp','parts','groundNotes','nameParts','promptTest'].includes(s.op)) {
+      if (!strictLocal) out.push(s.op);
+    } else if (s.op === 'pbr' || (s.op === 'checkRun' && s.planes)) {
+      out.push(s.op);
+    } else if ((s.op === 'ground' && !s.options?.reuse) || (s.op === 'props' && !s.options?.dry) || (s.op === 'repair' && !s.dry)) {
+      if (!strictLocal) out.push(s.op);
+    }
+  }
+  return out;
 }
 export const jsonSchema = schema => z.toJSONSchema(schema, { target:'draft-7', io:'input' });

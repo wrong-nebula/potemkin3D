@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { ROOT, inside, inspectGlb, atomicJSON, redact } from '../automation/files.mjs';
-import { workflow, paidSteps, jsonSchema, relativePath } from '../automation/schema.mjs';
+import { workflow, paidSteps, jsonSchema, relativePath, localUrl } from '../automation/schema.mjs';
 import { startJob, getJob, cancelJob, artifact } from '../automation/jobs.mjs';
 import { preflight } from '../automation/preflight.mjs';
 import { parseCLI } from '../automation/cli.mjs';
@@ -25,12 +25,17 @@ describe('automation boundaries',()=>{
     expect(workflow.parse({steps:[{op:'load',path:'samples/luxor.glb',options:{layout:'near',cavity:0.7,weights:true,paths:true,mode:'object'}},{op:'paths'},{op:'weights',overlay:'paths'},{op:'plan',options:{maxViews:24,adaptive:true,objective:'fisher',geodesic:true,mode:'object',focusParts:['barrel','face']}},{op:'consolidate',options:{size:1024,flow:true,lambda:0.02}},{op:'materialPresets',assignments:{hull:'hard-surface',barrel:'metal',tarp:'fabric',head:'organic'}},{op:'snapshot',camera:{position:[0,2,5],target:[0,1,0],weights:'paths'}}]}).steps.length).toBe(7);
     expect(jsonSchema(workflow).properties.steps.items.oneOf.length).toBeGreaterThan(30);
   });
-  it('requires explicit paid opt-in before any worker starts',()=>{
+  it('requires explicit paid opt-in before any worker starts, while allowing strict $0 local runs',()=>{
     const input={steps:[{op:'run',saveAs:'test'}]};
     expect(paidSteps(workflow.parse(input))).toEqual(['run']);
     expect(()=>startJob('workflow',input,{root:temp(),spawnWorker:()=>{throw Error('spawned');}})).toThrow(/allowPaid/);
     expect(paidSteps(workflow.parse({steps:[{op:'props',saveAs:'test',options:{dry:true}},{op:'ground',saveAs:'test',options:{reuse:true}},{op:'selfTest'}]}))).toEqual([]);
     expect(paidSteps(workflow.parse({steps:[{op:'checkRun',id:'test',planes:true},{op:'pbr'}]}))).toEqual(['checkRun','pbr']);
+    // Strict local provider ($0 paint, no cloud fallback) requires no paid opt-in; cloud fallback still requires allowPaid
+    expect(paidSteps(workflow.parse({steps:[{op:'provider',options:{provider:'local',localBackend:'comfyui',localUrl:'http://127.0.0.1:8188'}},{op:'run',saveAs:'local-run'},{op:'parts',saveAs:'local-run'}]}))).toEqual([]);
+    expect(paidSteps(workflow.parse({steps:[{op:'run',saveAs:'hybrid-run',options:{provider:'local',providerFallback:'fal'}}]}))).toEqual(['run']);
+    for(const bad of ['http://169.254.169.254:8000','https://evil.example:8188','ftp://127.0.0.1:8188'])expect(localUrl.safeParse(bad).success).toBe(false);
+    for(const ok of ['http://127.0.0.1:8188','http://localhost:8000','http://[::1]:8081'])expect(localUrl.safeParse(ok).success).toBe(true);
   });
   it('rejects existing and dangling symlink escapes',()=>{
     const root=temp(),outside=temp();

@@ -92,7 +92,7 @@ export async function executeJob(kind,input,ctx) {
         }
         currentRun=step.id;defaults=meta.options??{};args=[step.id];
       } else if(step.op==='loadSentoFloor') {loaded=true;currentRun=undefined;}
-      else if(!loaded)throw new AutomationError('INVALID_WORKFLOW',`${step.op} needs load, loadRun or loadSentoFloor first`);
+      else if(step.op!=='provider' && !loaded)throw new AutomationError('INVALID_WORKFLOW',`${step.op} needs load, loadRun or loadSentoFloor first`);
       if(step.saveAs && fs.existsSync(path.join(ROOT,'runs',step.saveAs)) && (step.op==='run'||step.saveAs!==currentRun))
         throw new AutomationError('RUN_EXISTS','Run ID already exists; use loadRun and topUp to resume it');
       if(['run','topUp'].includes(step.op))args=[{...defaults,...step.options,plan:{...defaults.plan,...step.options?.plan}},undefined,step.saveAs];
@@ -100,7 +100,7 @@ export async function executeJob(kind,input,ctx) {
       else if(step.op==='repair')args=[step.regions,undefined,step.saveAs,step.dry??false];
       else if(step.op==='groundNotes')args=[step.notes,undefined,step.saveAs];
       else if(step.op==='nameParts')args=[step.style??defaults.style];
-      else if(['plan','quote','projection','consolidate','ao','pbr','materialMaps','pick','promptTest'].includes(step.op))args=[step.options??{}];
+      else if(['provider','plan','quote','projection','consolidate','ao','pbr','materialMaps','pick','promptTest'].includes(step.op))args=[step.options??{}];
       else if(step.op==='walk')args=[step.options===null?null:step.options??{}];
       else if(step.op==='floorDetail')args=[step.options??undefined];
       else if(step.op==='materialPresets')args=[step.assignments];
