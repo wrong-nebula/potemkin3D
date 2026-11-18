@@ -104,6 +104,18 @@ describe('seenLayout', () => {
     expect(l.applied).toBe(false);
     expect([...l.uv]).toEqual(uv.map((x) => Math.fround(x)));
   });
+
+  it('applies triangle weights only to seen islands, using the lowest weight in each island', () => {
+    // Wall 0: seen and open (weight 1). Wall 1: seen, one triangle weighted 0.5 -> whole island scales by 0.5.
+    // Walls 2 and 3: unseen, carrying weight 0.5, which must not shrink them past unseenScale (0.3).
+    const l = seenLayout(position, uv, [1, 1, 1, 1, 0, 0, 0, 0], { weight: [1, 1, 1, 0.5, 0.5, 0.5, 1, 1], minGain: 0 });
+    expect(l.applied).toBe(true);
+    expect(extent(l.uv, 0, 12, 0)).toBeCloseTo(0.5 * l.gain, 4);
+    expect(extent(l.uv, 12, 24, 0)).toBeCloseTo(0.5 * l.gain * 0.5, 4);
+    expect(extent(l.uv, 12, 24, 1)).toBeCloseTo(0.5 * l.gain * 0.5, 4);   // uniform across both triangles of wall 1
+    expect(extent(l.uv, 24, 36, 0)).toBeCloseTo(0.5 * l.gain * 0.3, 4);   // unseen: unseenScale, not 0.3 * 0.5
+    expect(extent(l.uv, 36, 48, 0)).toBeCloseTo(0.5 * l.gain * 0.3, 4);
+  });
 });
 
 describe('seenCells', () => {

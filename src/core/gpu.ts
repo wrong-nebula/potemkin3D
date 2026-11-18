@@ -59,6 +59,7 @@ export class Gpu {
 
   /** RGBA8 readback. Rows come back bottom-up (GL order); `topDown` flips them to image order. */
   readU8(rt: THREE.WebGLRenderTarget, index = 0, topDown = true): Uint8ClampedArray {
+    if (this.renderer.getContext().isContextLost()) throw new Error('WebGL context lost');
     const { width: w, height: h } = rt;
     const buf = new Uint8Array(w * h * 4);
     this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf, undefined, index);
@@ -66,6 +67,7 @@ export class Gpu {
   }
 
   readF32(rt: THREE.WebGLRenderTarget, index = 0, topDown = true): Float32Array {
+    if (this.renderer.getContext().isContextLost()) throw new Error('WebGL context lost');
     const { width: w, height: h } = rt;
     const buf = new Float32Array(w * h * 4);
     this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf, undefined, index);

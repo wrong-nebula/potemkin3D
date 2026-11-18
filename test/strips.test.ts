@@ -120,5 +120,14 @@ describe('seenDistance and nearScaled', () => {
     expect(width(1)).toBeCloseTo(0.05, 6);          // nearest eye 6 m off: half
     expect(width(2)).toBeCloseTo(0.02, 6);          // unseen
     expect([l.islands, l.full, l.unseen]).toEqual([3, 1, 1]);
+
+    // `weight` shrinks seen islands further (lowest weight in the island wins) and leaves unseen islands at unseenScale
+    const w = nearScaled(position, uv, [2, 2, 6, 12, Infinity, Infinity],
+      { near: 3, farScale: 0.3, unseenScale: 0.2, weight: [1, 0.7, 0.8, 1, 0.5, 0.5] });
+    const wWidth = (k: number) => { const us = [0, 1, 2, 3, 4, 5].map((i) => w.uv[12 * k + 2 * i]); return Math.max(...us) - Math.min(...us); };
+    expect(wWidth(0)).toBeCloseTo(0.07, 6);         // near, weighted by min(1, 0.7)
+    expect(wWidth(1)).toBeCloseTo(0.04, 6);         // 0.5 * min(0.8, 1)
+    expect(wWidth(2)).toBeCloseTo(0.02, 6);         // unseen: still unseenScale (0.2), not 0.2 * 0.5
+    expect([w.islands, w.full, w.unseen]).toEqual([3, 0, 1]);
   });
 });

@@ -86,7 +86,8 @@ export async function executeJob(kind,input,ctx) {
         if(!loaded) {
           const file=`samples/${meta.level}.glb`;inside(ROOT,file);
           await page.evaluate(async({file,meta})=>window.trompe.load('/'+file.split('/').map(encodeURIComponent).join('/'),{lighting:meta.lighting?.name??'overcast',
-            atlasSize:meta.pages?.size??meta.atlasSize??4096,viewSize:meta.viewSize??1024,layout:meta.layout?.kind??'file',area:meta.area,pages:meta.pages?.count??1}),{file,meta});
+            atlasSize:meta.pages?.size??meta.atlasSize??4096,viewSize:meta.viewSize??1024,layout:meta.layout?.kind??'file',area:meta.area,pages:meta.pages?.count??1,
+            unwrap:meta.unwrap?.reason==='asked'?'always':'auto',cavity:meta.layout?.cavity??0}),{file,meta});
           loaded=true;
         }
         currentRun=step.id;defaults=meta.options??{};args=[step.id];

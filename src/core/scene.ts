@@ -86,6 +86,9 @@ export interface LevelLayout {
   /** With 'near': islands too long for a page that were cut, and the pieces they are now (core/layout.ts cutIslands). */
   cut?: number;
   pieces?: number;
+  /** Enclosed islands drawn smaller (Session.load `cavity`): the smallest scale, the share of the surface shrunk, and
+   * the share of their texels those islands keep before packing. */
+  cavity?: { minScale: number; shrunkSurface: number; kept: number; seconds: number };
   /** False when the weighted layout gained too little and the file's own was kept. */
   applied: boolean;
   /** How much denser the faces players see are than in the file's layout, along each axis. */

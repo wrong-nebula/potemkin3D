@@ -135,4 +135,10 @@ export class SkyDome {
     this.count.fill(0);
     (this.mesh.material as THREE.ShaderMaterial).uniforms.has.value = 0;
   }
+
+  dispose() {
+    this.gradient.dispose();
+    this.mesh.geometry.dispose();
+    (this.mesh.material as THREE.Material).dispose();
+  }
 }

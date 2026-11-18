@@ -418,8 +418,13 @@ export class Viewer {
     this.disposed = true; this.floorDetailRequest++;
     this.removeFloorDetail?.(); this.floorDetail?.dispose(); this.floorDetail = undefined;
     this.stopWalk();
+    this.clearOverlay();
     this.setPbr(undefined);
     this.setAo(undefined);
+    this.sun.shadow.dispose();
+    this.texMaterial.dispose();
+    this.litMat.dispose();
+    this.sky.dispose();
     this.controls.dispose();
   }
 

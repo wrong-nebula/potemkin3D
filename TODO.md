@@ -83,11 +83,10 @@ Paper references in the source notes have not been checked yet (in particular "L
 
 All of them run client-side (or as a short local pre-process) and write a per-triangle weight attribute that rides along with `label`:
 
-- **AO / enclosure.** Use [Fast-SDF-AO](https://github.com/wrong-nebula/Fast-SDF-AO): its exact BVH-based SDF baker for meshes, plus the SDF-march visibility estimator (with `contact-bvh.js` for the near segment). Compute this per face or per texel instead of the 24-ray hemisphere in `src/core/ao.ts`, and check speed and accuracy against it.
-  - High-AO faces get dirt, wear or darker variants in the prompt and finish passes.
-  - Open faces get cleaner base looks and more weight in the planner and packer.
-  - It could also replace `ao.ts` for the exported occlusion map if it wins on speed.
-- **Curvature / features.** Use discrete curvature or the normal variation across neighbouring faces. Sharp edges, high curvature and silhouettes get close-up cameras, denser texels and detailed normal/height maps. Flat areas get fewer views.
+- **AO / enclosure** (cavity layout weight done: `src/core/surface-weights.ts`, `--cavity`). `faceOpenness` estimates each face's cosine-weighted openness within 1.12 m from 4 rotated short rays per sample point against the BVH (0.01–0.64 s across the samples, 0.018–0.025 MAE against 256 rays; [Fast-SDF-AO](https://github.com/wrong-nebula/Fast-SDF-AO)'s four-tap formula with a normal-ray sign guard errs by 0.07–0.15 on unclosed blockouts because thin bars beside a face read as walls). `cavityScale` shrinks enclosed islands in `seenLayout` and `nearScaled`.
+  - Still open: feed openness to the planner's cell weights; give high-AO faces dirt, wear or darker variants in the prompt and finish passes; measure a baked SDF against `ao.ts` for the exported occlusion map.
+- **Concave curvature / creases** (covered for packing by the cavity weight above). Recesses, slots and tight inside corners sit in shadow and out of reach, so they need fewer texels.
+- **Convex curvature / silhouettes.** Use discrete curvature (such as Cohen-Steiner & Morvan's normal-cycle tensor across interior edges) or normal variation across neighbouring faces. Exposed sharp edges, ridges, columns and silhouettes get close-up cameras, denser texels and detailed normal/height maps. Flat areas get fewer views.
 - **Semantic / material class.** Tag faces as floor, wall, ceiling, organic or hard-surface, using heuristics on normal, height and connectivity (and `semantics.ts` / part names), or a light classifier.
   - Each class pulls a look preset, roughness range and repair strategy before painting.
   - The atlas splitter keeps same-class islands together.

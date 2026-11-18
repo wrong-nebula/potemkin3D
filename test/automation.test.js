@@ -21,6 +21,8 @@ describe('automation boundaries',()=>{
     expect(()=>workflow.parse({steps:[{op:'eval',code:'x'}]})).toThrow();
     expect(()=>workflow.parse({steps:[{op:'bounds'}],falKey:'secret'})).toThrow();
     for(const p of ['../file','/tmp/file','foo/../file','C:\\file','a//b'])expect(relativePath.safeParse(p).success).toBe(false);
+    expect(()=>workflow.parse({steps:[{op:'load',path:'samples/luxor.glb',options:{layout:'near',cavity:1}}]})).toThrow();
+    expect(workflow.parse({steps:[{op:'load',path:'samples/luxor.glb',options:{layout:'near',cavity:0.7}}]}).steps[0].options.cavity).toBe(0.7);
     expect(jsonSchema(workflow).properties.steps.items.oneOf.length).toBeGreaterThan(30);
   });
   it('requires explicit paid opt-in before any worker starts',()=>{

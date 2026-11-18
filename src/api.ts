@@ -98,9 +98,9 @@ export function makeApi(session: Session) {
       return session.viewer.floorDetailState;
     },
     demo: new Demo(session),
-    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off' } = {}) {
+    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number } = {}) {
       const name = opts.name ?? url.split('/').pop()!.replace(/\.\w+$/, '');
-      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto');
+      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0);
     },
     /** How views are projected into the texture from here on (and when a run is loaded): see EngineOptions. */
     projection(o: { minCos?: number; edgeGuard?: number; frameMargin?: number }) {

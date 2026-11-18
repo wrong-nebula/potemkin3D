@@ -196,8 +196,10 @@ export interface Layout {
  * @param position world-space corners of non-indexed triangles
  * @param uv the file's texture coordinates, 2 per corner
  * @param seen 1 per triangle a player can see (`seenTriangles`)
+ * @param opts.weight a further scale per triangle for the seen islands, as in `nearScaled`
  */
-export function seenLayout(position: ArrayLike<number>, uv: ArrayLike<number>, seen: ArrayLike<number>, opts: Partial<LayoutOptions> = {}): Layout {
+export function seenLayout(position: ArrayLike<number>, uv: ArrayLike<number>, seen: ArrayLike<number>,
+  opts: Partial<LayoutOptions> & { weight?: ArrayLike<number> } = {}): Layout {
   const o = { ...DEFAULT_LAYOUT, ...opts };
   const tris = Math.floor(position.length / 9);
   const { of, count } = uvIslands(position, uv, seen);
@@ -221,6 +223,9 @@ export function seenLayout(position: ArrayLike<number>, uv: ArrayLike<number>, s
     surface += world; texture += tex;
     if (seen[t]) { surfaceSeen += world; textureSeen += tex; }
   }
+  const seenIsland = new Float32Array(count);
+  for (let t = 0; t < tris; t++) if (seen[t]) seenIsland[of[t]] = 1;
+  applyWeight(scale, of, opts.weight, seenIsland);
   const bw = new Float32Array(count), bh = new Float32Array(count);
   let area = 0;
   for (let k = 0; k < count; k++) {
@@ -254,6 +259,14 @@ export function seenLayout(position: ArrayLike<number>, uv: ArrayLike<number>, s
     }
   }
   return { uv: out, applied: true, gain: lo, seenSurface, seenTexture, islands: count };
+}
+
+/** Multiply each island's scale by the lowest weight of its triangles, on the islands where `on` is 1. */
+function applyWeight(scale: Float32Array, of: Int32Array, weight: ArrayLike<number> | undefined, on: ArrayLike<number>) {
+  if (!weight) return;
+  const w = new Float32Array(scale.length).fill(1);
+  for (let t = 0; t < of.length; t++) w[of[t]] = Math.min(w[of[t]], weight[t]);
+  for (let k = 0; k < scale.length; k++) if (on[k]) scale[k] *= w[k];
 }
 
 /**
@@ -442,9 +455,11 @@ export function stripLayout(position: ArrayLike<number>, uv: ArrayLike<number>, 
  * when some eye gets within `near` metres of it, and from there shrinks as that distance grows, down to `farScale`;
  * islands no eye sees are drawn at `unseenScale`. Not packed: the islands keep their corners where they were.
  * @param dist how near an eye gets to each triangle (`seenDistance`)
+ * @param opts.weight a further scale per triangle for the islands players see (the lowest of an island's
+ *   triangles counts), such as `cavityScale` (core/surface-weights.ts): enclosed islands drawn smaller
  */
 export function nearScaled(position: ArrayLike<number>, uv: ArrayLike<number>, dist: ArrayLike<number>,
-  opts: { near?: number; farScale?: number; unseenScale?: number } = {}): { uv: Float32Array; islands: number; full: number; unseen: number } {
+  opts: { near?: number; farScale?: number; unseenScale?: number; weight?: ArrayLike<number> } = {}): { uv: Float32Array; islands: number; full: number; unseen: number } {
   const near = opts.near ?? 3, farScale = opts.farScale ?? 0.3, unseenScale = opts.unseenScale ?? DEFAULT_LAYOUT.unseenScale;
   const tris = Math.floor(position.length / 9);
   const { of, count } = uvIslands(position, uv);
@@ -455,6 +470,7 @@ export function nearScaled(position: ArrayLike<number>, uv: ArrayLike<number>, d
     for (let v = 0; v < 3; v++) { minU[k] = Math.min(minU[k], uv[6 * t + 2 * v]); minV[k] = Math.min(minV[k], uv[6 * t + 2 * v + 1]); }
   }
   const scale = Float32Array.from(d, (x) => (Number.isFinite(x) ? Math.min(1, Math.max(farScale, near / x)) : unseenScale));
+  applyWeight(scale, of, opts.weight, Float32Array.from(d, (x) => (Number.isFinite(x) ? 1 : 0)));
   const out = new Float32Array(tris * 6);
   for (let t = 0; t < tris; t++) {
     const k = of[t];

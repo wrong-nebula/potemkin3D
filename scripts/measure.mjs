@@ -10,11 +10,14 @@ const { values: a } = parseArgs({
   options: {
     level: { type: 'string', default: 'samples/village.glb' },
     run: { type: 'string' },
-    atlas: { type: 'string', default: '4096' },
+    atlas: { type: 'string' },
+    pages: { type: 'string' },
     'view-size': { type: 'string' },   // the run's own when not given
     layout: { type: 'string' },
+    cavity: { type: 'string' },
+    unwrap: { type: 'string' },
     'min-cos': { type: 'string' },     // replay with another grazing-angle cut-off
-    'edge-guard': { type: 'string' }, 'frame-margin': { type: 'string' },  // replay with another guard round nearer outlines (px at 1024 px views)   // 'file' or 'seen'; the run's own when not given
+    'edge-guard': { type: 'string' }, 'frame-margin': { type: 'string' },  // replay with another guard round nearer outlines (px at 1024 px views)   // 'file', 'seen' or 'near'; the run's own when not given
     json: { type: 'boolean', default: false },
   },
 });
@@ -24,14 +27,18 @@ if (!a.run) {
 }
 const saved = JSON.parse(fs.readFileSync(`runs/${a.run}/run.json`, 'utf8'));
 const lighting = saved.lighting?.name ?? 'outdoor';
+a.atlas ??= String(saved.pages?.size ?? saved.atlasSize ?? 4096);
+const pages = +(a.pages ?? saved.pages?.count ?? 1);
 a['view-size'] ??= String(saved.viewSize ?? 1024);
 const layout = a.layout ?? saved.layout?.kind ?? 'file';
+const cavity = layout === 'file' ? 0 : +(a.cavity ?? (a.layout ? 0 : saved.layout?.cavity ?? 0));
+const unwrap = a.unwrap ?? (saved.unwrap?.reason === 'asked' ? 'always' : 'auto');
 const { server, url } = await startServer();
 const browser = await launchBrowser();
 try {
   const page = await openApp(browser, url, { onLog: () => {}, onEvent: () => {} });
-  await page.evaluate(([lvl, l, atlas, viewSize, layout, area]) => window.trompe.load(`/${lvl}`, { lighting: l, atlasSize: +atlas, viewSize: +viewSize, layout, area }),
-    [a.level, lighting, a.atlas, a['view-size'], layout, saved.area]);
+  await page.evaluate(([lvl, l, atlas, viewSize, layout, area, pages, unwrap, cavity]) => window.trompe.load(`/${lvl}`, { lighting: l, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity }),
+    [a.level, lighting, a.atlas, a['view-size'], layout, saved.area, pages, unwrap, cavity]);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) await page.evaluate((o) => window.trompe.projection(o), { ...(a['min-cos'] ? { minCos: +a['min-cos'] } : {}), ...(a['edge-guard'] ? { edgeGuard: +a['edge-guard'] } : {}), ...(a['frame-margin'] ? { frameMargin: +a['frame-margin'] } : {}) });
   await page.evaluate((r) => window.trompe.loadRun(r), a.run);
   const m = await page.evaluate(() => window.trompe.measure());
