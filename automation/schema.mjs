@@ -62,6 +62,7 @@ export const steps = [
   step('props', { saveAs: id, options: object(optional({ max: count, only: z.array(text), angles: count, runId: id,
     mode: z.enum(['sheet','sequence']), model: text, split: z.boolean(), cels: z.array(text), dry: z.boolean(),
     cameras: z.record(z.string(), z.array(object({ position: vector, target: vector, fov: number.optional() }))) })).optional() }),
+  step('consolidate', { options: object(optional({ size, depthSize: size, flow: z.boolean(), maxShift: number.min(0).max(16), lambda: number.min(0).max(1) })).optional() }),
   step('finish'), step('save', { id }),
   step('ao', { options: object(optional({ size, rays: z.number().int().min(1).max(256), radius: positive })).optional() }),
   step('pbr', { options: object(optional({ size, seed: z.number().int(), strength: number.min(0), baseRoughness: fraction,

@@ -69,7 +69,7 @@ The engine samples walkable ground, places eye-height cameras, checks visibility
 
 ### 3. Paint views, preserve structure, and project
 
-Image models receive a clay/state render, material instructions, part names and optional reference images. Earlier paint supplies context for later views. Compositing preserves known pixels and adjusts color drift at seams. Geometry checks reject or retry regions where the model replaces a surface. Projection favors views with better angle and distance, while cleanup and part-specific passes concentrate additional calls on remaining defects. A final local color fill covers otherwise unreachable slivers; it does not invent missing geometric detail.
+Image models receive a clay/state render, material instructions, part names and optional reference images. Earlier paint supplies context for later views. Compositing preserves known pixels and adjusts color drift at seams. Geometry checks reject or retry regions where the model replaces a surface. Projection favors views with better angle and distance, while `--consolidate` (`consolidate.ts`) back-projects overlapping views with `cosθ/d × depth-continuity` confidence, registers shifted surface detail along a high-pass tangent flow field, and runs a multigrid Screened-Poisson stitch to remove `--parallel` view seams without extra model calls. Cleanup and part-specific passes concentrate additional calls on remaining defects, and a final local color fill covers otherwise unreachable slivers.
 
 ### 4. Separate painted color from surface response
 

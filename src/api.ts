@@ -23,6 +23,7 @@ import type { FloorDetailSpec } from './core/floor-detail';
 import { MATERIAL_PRESETS, type MaterialAssignments } from './core/material-presets';
 import type { AlignedMapSource } from './core/aligned-maps';
 import { validateViews } from './core/validation-engine';
+import type { ConsolidateOptions } from './core/consolidate';
 import type { WeightOverlay } from './core/viewer';
 
 /**
@@ -171,6 +172,10 @@ export function makeApi(session: Session) {
       cameras?: Record<string, { position: [number, number, number]; target: [number, number, number]; fov?: number }[]> } = {}, falKey?: string, saveAs?: string) {
       configureFal(falKey);
       return session.propPass(opts, (message) => emit({ type: 'check', message }), saveAs);
+    },
+    /** Texture-space multi-view seam consolidation (tangent-flow registration + Screened-Poisson stitch; core/consolidate.ts). No model call. */
+    consolidate(opts: ConsolidateOptions = {}) {
+      return session.consolidate(opts);
     },
     /** The finishing fill: what no view painted takes its part's colours (core/finish.ts). No model call. */
     finish() {

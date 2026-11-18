@@ -28,19 +28,17 @@ Paper references in the source notes have not been checked yet (in particular "L
 
 **Done when:** a full sample run completes with `--provider local`, without fal (except optional SAM/MoGe), and quotes $0 for paint.
 
-## 3. Consistency: synchronised views + texture-space consolidation
+## 3. Consistency: synchronised views + texture-space consolidation (post-process baseline done: `src/core/consolidate.ts`, `--consolidate`)
 
 **Why:** sequential painting drifts. `--parallel` leaves visible seams. "Next is an automatic retouch pass for seams and odd patches."
 
-- **Post-process first** (it needs no new model). Back-project each view into atlas space with per-texel confidence `w = cosθ/d × depth-continuity`. Solve a surface tangent flow field to register overlapping views, advect colours along it, then run a confidence-weighted gradient-domain (Poisson) stitch. Do this in the Python layer or a WebGPU compute pass after `atlas.ts`.
-- **Then joint generation (TexFusion-style).** Denoise several overlapping views at once and, after every denoising step, aggregate their predicted latents into a shared latent texture (Sequential Interlaced Multiview Sampler). Then decode and bake the RGB (or PBR) atlas.
+- **~~Post-process first~~** (done: `src/core/consolidate.ts`, `--consolidate`, `trompe.consolidate()`, MCP `consolidate` step; zero model calls). Back-projects each view into atlas space with per-texel confidence `w = (lens × cosθ / d) × depthContinuity × rimFade`, solves a damped Lucas-Kanade surface-tangent flow field on high-pass structural luminance (invariant to parallel exposure/colour drift) and advects overlapping colours along it, then solves a 3-level multigrid Screened-Poisson stitch within each UV island / part boundary (`Atlas.updatePaint` / `Atlas.applyConsolidation`, preserving native 4K/8K detail, per-texel capture quality, `fidelity.ts` masks and downstream ground/part/finish passes).
+  - **Measured (`--parallel 6`, 18 views, 0 extra passes):** on **Courtyard** (`16,305` boundary edges, 2.4 s), seam step drops **15.8 → 5.4 RGB (-66%)** and seam ratio drops **2.74 → 1.02**; on **Hall** (`31,163` boundary edges, 2.5 s), seam step drops **14.7 → 4.1 RGB (-72%)** and seam ratio drops **3.34 → 1.00** while retaining >91% of interior grain contrast.
+- **Still open — joint generation (TexFusion-style).** Denoise several overlapping views at once and, after every denoising step, aggregate their predicted latents into a shared latent texture (Sequential Interlaced Multiview Sampler). Then decode and bake the RGB (or PBR) atlas.
   - This needs denoiser access, so it means a local model via item 2. Hosted edit endpoints don't expose the steps.
   - Planner and packing stay as they are. Multi-view models are an alternative where a provider has them.
   - Optionally use MRF face-to-view assignment instead of per-texel max quality.
-- **Learned back-projection (Im2SurfTex-style).** Replace hard per-texel projection with a small module that attends over nearby projected pixels (depth, normal and confidence-weighted) before writing to the atlas. Start with the confidence-weighted Poisson blend above as the non-learned baseline, then train on the multi-view outputs we already save in `runs/`.
-- Keep the fidelity checks (`fidelity.ts`) and material separation in the loop.
-
-**Done when:** seam metric (colour step across view boundaries) drops measurably on Courtyard/Hall with `--parallel 6`, at no extra full-resolution passes.
+- **Still open — learned back-projection (Im2SurfTex-style).** Replace hard per-texel projection with a small module that attends over nearby projected pixels (depth, normal and confidence-weighted) before writing to the atlas, trained on multi-view outputs in `runs/` against the Screened-Poisson baseline above.
 
 ## 4. UV-space refinement (Paint3D-style coarse-to-fine)
 

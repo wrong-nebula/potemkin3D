@@ -181,6 +181,8 @@ export interface RunRecord {
     match?: boolean };
   /** Notes carried out on the ground after it was laid (Session.groundNotes); `file` is the picture in the run's folder. */
   groundNotes?: { text: string; spec: ViewSpec; file: string; price: number }[];
+  /** Texture-space multi-view seam consolidation applied after view projection (core/consolidate.ts). */
+  consolidated?: { size: number; flow?: boolean; lambda?: number; before: import('./consolidate').SeamScore; after: import('./consolidate').SeamScore };
   /** Normal and roughness maps made for this run's texture (core/pbr.ts). */
   pbr?: import('./pbr').PbrMetadata;
 }

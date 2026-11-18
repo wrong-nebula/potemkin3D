@@ -168,6 +168,43 @@ void main() {
   if (f.a > 0.5) outColor = vec4(f.rgb / f.a, quality);
 }`;
 
+/** Replace painted texel RGB from a consolidated atlas while keeping per-texel capture quality `c.a` intact. */
+const UPDATE_PAINT_FRAG = /* glsl */ `
+uniform sampler2D src;
+uniform sampler2D paint;
+uniform vec3 page;
+layout(location = 0) out vec4 outColor;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(src, p, 0);
+  outColor = c;
+  if (c.a <= 0.0003) return;
+  vec4 u = texture(paint, (page.xy + gl_FragCoord.xy / vec2(textureSize(src, 0))) / page.z);
+  if (u.a > 0.5) outColor = vec4(u.rgb / u.a, c.a);
+}`;
+
+/** Apply a signed RGB seam-consolidation offset (`128/255` = 0, `±1` over `±127/255`) across all pages, blending smoothly into `paint.rgb` right across sub-cell view-boundary ribbons (`paint.a > 0.52`). */
+const CONSOLIDATE_PAINT_FRAG = /* glsl */ `
+uniform sampler2D src;
+uniform sampler2D paint;
+uniform sampler2D delta;
+uniform vec3 page;
+layout(location = 0) out vec4 outColor;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(src, p, 0);
+  outColor = c;
+  if (c.a <= 0.0003) return;
+  vec2 uv = (page.xy + gl_FragCoord.xy / vec2(textureSize(src, 0))) / page.z;
+  vec4 d = texture(delta, uv);
+  if (d.a < 0.5) return;
+  vec3 off = (d.rgb - vec3(128.0 / 255.0)) * (255.0 / 127.0);
+  vec3 corrected = clamp(c.rgb + off, 0.0, 1.0);
+  vec4 u = texture(paint, uv);
+  float seam = clamp((u.a - 0.52) / 0.45, 0.0, 1.0);
+  outColor = vec4(mix(corrected, u.rgb, seam), c.a);
+}`;
+
 /** A part's own texture drawn into the level's layout: each corner carries where it is in both. */
 const PART_VERT = /* glsl */ `
 uniform vec3 page;
@@ -560,6 +597,49 @@ export class Atlas {
       throw new Error('Paint atlas dimensions do not match its pixels');
     this.reset();
     this.fillUnpainted(new Uint8ClampedArray(rgba), size, 1);
+  }
+
+  /** Update painted texels' RGB from a consolidated `n` x `n` RGBA8 map (first row = v 0), keeping capture quality `a`. */
+  updatePaint(rgba: Uint8ClampedArray, n: number) {
+    const copy = new Uint8ClampedArray(rgba);
+    for (let i = 0; i < copy.length; i += 4) if (!copy[i + 3]) copy[i] = copy[i + 1] = copy[i + 2] = 0;
+    const tex = new THREE.DataTexture(copy, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.premultiplyAlpha = false;
+    tex.needsUpdate = true;
+    const mat = passMaterial(UPDATE_PAINT_FRAG, { src: { value: null }, paint: { value: tex }, page: this.pageU });
+    this.eachPage((page, k) => {
+      mat.uniforms.src.value = page.a.texture;
+      this.gpu.pass(mat, this.b);
+      this.swap(page);
+      this.padPage(page, k);
+    });
+    mat.dispose();
+    tex.dispose();
+    this.revision++;
+  }
+
+  /** Apply a consolidated low-frequency offset across all pages while blending `paintRgba` across sub-cell view-boundary ribbons (`paint.a = 255` on seams, `128` inside). */
+  applyConsolidation(paintRgba: Uint8ClampedArray, deltaRgba: Uint8ClampedArray, n: number) {
+    const paintTex = new THREE.DataTexture(paintRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+    paintTex.minFilter = paintTex.magFilter = THREE.LinearFilter;
+    paintTex.premultiplyAlpha = false;
+    paintTex.needsUpdate = true;
+    const deltaTex = new THREE.DataTexture(deltaRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+    deltaTex.minFilter = deltaTex.magFilter = THREE.LinearFilter;
+    deltaTex.premultiplyAlpha = false;
+    deltaTex.needsUpdate = true;
+    const mat = passMaterial(CONSOLIDATE_PAINT_FRAG, { src: { value: null }, paint: { value: paintTex }, delta: { value: deltaTex }, page: this.pageU });
+    this.eachPage((page, k) => {
+      mat.uniforms.src.value = page.a.texture;
+      this.gpu.pass(mat, this.b);
+      this.swap(page);
+      this.padPage(page, k);
+    });
+    mat.dispose();
+    paintTex.dispose();
+    deltaTex.dispose();
+    this.revision++;
   }
 
   /**

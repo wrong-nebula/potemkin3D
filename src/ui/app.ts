@@ -158,6 +158,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
   runsSection.style.display = 'none';
   const glbBtn = h('button', {}, 'Download .glb');
   const texDl = h('button', {}, 'Download texture');
+  const consolidateBtn = h('button', {}, 'Consolidate view seams · free');
   const mapsDl = h('button', {}, 'Download material maps');
   mapsDl.style.display = 'none';
   const key = h('input', { type: 'password', placeholder: 'fal key (optional)' });
@@ -187,7 +188,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
       h('div', { class: 'row' }, h('span', { class: 'lab' }, 'Relief'), relief), floorDetailControls, aoBtn,
       h('div', { class: 'note' }, `${MATERIAL_MODEL.label} predicts height and roughness together. Normals come from that height; presets set each surface's response. Original paint stays intact. Baked normal and roughness maps are exported with the .glb.`)),
     h('section', {}, h('label', {}, 'Display'), segMode, weightsSel, h('label', { class: 'row note' }, camsBox, 'Show cameras'), walkBtn),
-    h('section', {}, h('label', {}, 'Export'), h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
+    h('section', {}, h('label', {}, 'Export'), consolidateBtn, h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
     h('section', {}, h('label', {}, 'fal'), key, h('div', { class: 'note' }, 'Empty: uses FAL_KEY from the dev server. A key here is stored in this browser and sent straight to fal.')),
     log,
   );
@@ -543,6 +544,20 @@ export function mountUi(session: Session, panel: HTMLElement) {
     }
   };
   stopBtn.onclick = () => session.stop();
+  consolidateBtn.onclick = async () => {
+    if (!session.record) { say('paint or load a run first'); return; }
+    consolidateBtn.disabled = true;
+    try {
+      const r = await session.consolidate();
+      say(`consolidated ${r.views} views (${r.flowAdvected} registered by tangent flow) in ${r.seconds}s: seam step ${r.before.step.toFixed(1)} → ${r.after.step.toFixed(1)} RGB (ratio ${r.before.ratio.toFixed(2)} → ${r.after.ratio.toFixed(2)})`);
+      if (savedAs) { await session.saveRun(savedAs); say(`saved with runs/${savedAs}/`); }
+    } catch (e) {
+      say(String((e as Error)?.message ?? e));
+    } finally {
+      consolidateBtn.disabled = false;
+      syncPbr();
+    }
+  };
   const download = (blob: Blob, name: string) => {
     const a = h('a', { href: URL.createObjectURL(blob), download: name });
     a.click();

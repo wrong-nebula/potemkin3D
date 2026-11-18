@@ -15,6 +15,7 @@ import { DEFAULT_PLAN, plan as makePlan, samplePlayerPoints, surfaceOf, type Pla
 import { cutIslands, islandLimit, layoutHash, nearScaled, pagedLayout, seenCells, seenDistance, seenLayout, seenShare, seenTriangles, stripLayout } from './core/layout';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { fillColours } from './core/finish';
+import { consolidateViews, type ConsolidateOptions } from './core/consolidate';
 import { matchCorners, partMesh, pickParts, toGlb, type PartMesh, type PartStats } from './core/partpass';
 import { runEdit, runRetexture } from './providers/fal';
 import { PAINTED, PART_QUALITY } from './core/atlas';
@@ -587,11 +588,12 @@ export class Session {
   /** The textured parts of the loaded run, by part name, to put them back after the views are replayed. */
   private partFiles = new Map<string, ArrayBuffer>();
 
-  /** After the run's views were projected again: put its part textures and its finishing fill back. */
+  /** After the run's views were projected again: put its consolidation, ground, part textures and finishing fill back. */
   async restoreExtras() {
     const r = this.record;
-    if (!r || !this.level) return;
-    this.layGround();   // first: it reads the ground as the views alone painted it
+    if (!r || !this.level || !this.engine) return;
+    if (r.consolidated) consolidateViews(this.engine, r.views, { size: r.consolidated.size, flow: r.consolidated.flow, lambda: r.consolidated.lambda });
+    this.layGround();   // reads the ground as the views (and consolidation) painted it
     this.paintGroundNotes();
     for (const p of r.partPass ?? []) {
       const buf = this.partFiles.get(p.name), label = this.level.labels.indexOf(p.name);
@@ -1221,6 +1223,28 @@ export class Session {
   }
 
   /**
+   * Texture-space multi-view consolidation (core/consolidate.ts): back-project the run's views with `cosθ/d × depth-continuity`
+   * confidence, register overlapping views via high-pass tangent flow, and run a Screened-Poisson stitch to remove
+   * `--parallel` and sequential drift seams without blurring surface detail. Zero model calls.
+   */
+  async consolidate(opts: ConsolidateOptions = {}) {
+    const e = this.engine, r = this.record;
+    if (!e || !r) throw new Error('paint or load a run first');
+    e.replay(r.views);
+    const res = consolidateViews(e, r.views, opts);
+    r.consolidated = { size: res.size, flow: opts.flow !== false, lambda: opts.lambda ?? 0.02, before: res.before, after: res.after };
+    this.layGround();
+    this.paintGroundNotes();
+    for (const p of r.partPass ?? []) {
+      const buf = this.partFiles.get(p.name), label = this.level!.labels.indexOf(p.name);
+      if (buf && label >= 0) await this.applyPart(label, buf, p.still ? 'auto' : 'gaps');
+    }
+    if (r.finished) this.finish();
+    this.viewer?.setMode('textured');
+    return res;
+  }
+
+  /**
    * The finishing fill (core/finish.ts): give what no view painted its own part's colours, so nothing a player sees
    * is left as bare clay. Filled texels remain targets for any later view. No model call.
    */
@@ -1261,6 +1285,7 @@ export class Session {
       projection: { minCos: this.engine!.options.minCos, edgeGuard: this.engine!.options.edgeGuard, frameMargin: this.engine!.options.frameMargin }, lighting: this.engine!.clay.lighting, cost: r.cost, seconds: r.seconds,
       ...(partial ? { partial: true } : {}), ...(r.pbr ? { pbr: r.pbr } : {}),
       ...(this.level?.shapes ? { parts: [...this.level.labels] } : {}),
+      ...(r.consolidated ? { consolidated: r.consolidated } : {}),
       ...(r.finished ? { finished: true } : {}),
       ...(r.ground ? { ground: r.ground } : {}),
       ...(r.groundNotes?.length ? { groundNotes: r.groundNotes } : {}),
@@ -1360,6 +1385,10 @@ export class Session {
       pbr: sameLayoutAs(meta, this.level) ? meta.pbr : undefined };
     await this.viewer.setFloorDetail();
     this.engine.replay(views);
+    if (meta.consolidated) {
+      this.record.consolidated = meta.consolidated;
+      consolidateViews(this.engine, views, { size: meta.consolidated.size, flow: meta.consolidated.flow, lambda: meta.consolidated.lambda });
+    }
     // the ground laid from tiles goes back first: it reads the ground as the views alone painted it
     this.groundTiles = undefined;
     if (meta.ground?.files?.length) {
