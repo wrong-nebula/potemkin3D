@@ -32,7 +32,7 @@ describe('automation boundaries',()=>{
     expect(paidSteps(workflow.parse({steps:[{op:'props',saveAs:'test',options:{dry:true}},{op:'ground',saveAs:'test',options:{reuse:true}},{op:'selfTest'}]}))).toEqual([]);
     expect(paidSteps(workflow.parse({steps:[{op:'checkRun',id:'test',planes:true},{op:'pbr'}]}))).toEqual(['checkRun','pbr']);
     // Strict local provider ($0 paint, no cloud fallback) requires no paid opt-in; cloud fallback still requires allowPaid
-    expect(paidSteps(workflow.parse({steps:[{op:'provider',options:{provider:'local',localBackend:'comfyui',localUrl:'http://127.0.0.1:8188'}},{op:'run',saveAs:'local-run'},{op:'parts',saveAs:'local-run'}]}))).toEqual([]);
+    expect(paidSteps(workflow.parse({steps:[{op:'provider',options:{provider:'local',localBackend:'comfyui',localUrl:'http://127.0.0.1:8188'}},{op:'run',saveAs:'local-run'},{op:'parts',saveAs:'local-run'},{op:'pbr',options:{mode:'intrinsic'}},{op:'exportPbr',options:{format:'both'}}]}))).toEqual([]);
     expect(paidSteps(workflow.parse({steps:[{op:'run',saveAs:'hybrid-run',options:{provider:'local',providerFallback:'fal'}}]}))).toEqual(['run']);
     for(const bad of ['http://169.254.169.254:8000','https://evil.example:8188','ftp://127.0.0.1:8188'])expect(localUrl.safeParse(bad).success).toBe(false);
     for(const ok of ['http://127.0.0.1:8188','http://localhost:8000','http://[::1]:8081'])expect(localUrl.safeParse(ok).success).toBe(true);

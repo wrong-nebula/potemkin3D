@@ -91,14 +91,12 @@ All of them run client-side in 0.02–1.70 s combined across the bundled samples
 - **Spend & bottleneck report (`budgetAdvice`, `plan.budget`).** Reports the diminishing-returns `recommendedViews` knee, whether `views` or `layout` is the active bottleneck, `localModelTailViews` suited to a cheap/local model (item 2), and `sparseHeightTiles` for skipping low-importance PATINA PBR tiles.
 - **Measured (`--layout near --weights`, 2048 px views):** matches or beats static `coverage` surface detail in 21–33% fewer views — Luxor in **46 views vs 64** (important-surface mean 32.6 vs 32.4 px/m; knee at 33 views), Hangar in **32 vs 44** (whole-level median 31.3 vs 23.4 px/m, important mean 36.6 vs 31.7 px/m), Loft in **16 vs 24** (mean 26.0 vs 24.6 px/m, p75 41.6 vs 13.7), Post Hall in **20 vs 28** (mean 48.2 vs 48.1 px/m, med 47.8), Village in **22 vs 28**, and Courtyard in **19 vs 24**.
 
-## 9. Full PBR channel set
+## 9. ~~Full PBR channel set~~ (done: `src/core/pbr.ts`, `src/core/aligned-maps.ts`, `src/core/export.ts`, `--pbr-mode intrinsic|patina|auto`, `exportPbr`)
 
 **Why:** normals and roughness currently come from PATINA plus presets. Metallic is mostly missing, and height is derived.
 
-- After the consolidated albedo, run a pass that produces roughness, metallic and a refined normal, conditioned on albedo and the geometry buffers. Use a multi-view PBR model or a lightweight intrinsic-decomposition estimator.
-- Pack into the same atlas pages with aligned islands (`aligned-maps.ts`). Export ORM or separate linear maps. Keep AO, POM and edge wear.
-
-**Done when:** exported GLB relights correctly in an engine viewer; metal parts read as metal under a moving light.
+- **Albedo + geometry-conditioned intrinsic PBR estimator (`estimateIntrinsicPbr`, `makePbr`).** Decomposes consolidated/refined albedo together with the 3D position/normal buffers and geometry prepasses (`openness`, signed convex `curvature`, `faceClass`, part labels and `materialPresets`) into aligned `height` (preserving POM), `roughness`, `metalness` (suppressing dielectric rust/cavity grime while boosting exposed metallic ridges), `refinedNormal` (fused atop physical height slopes) and `edgeWear` in ~0.18 s at $0 (`--pbr-mode intrinsic` or automatic under `--provider local`), or fuses with cloud PATINA tiles under `--pbr-mode patina`.
+- **Aligned ORM & separate linear maps (`buildAlignedMaps`, `unpackLinearPbrChannels`, `exportPbr`, `exportGlb`).** Packs occlusion (R), roughness (G) and metalness (B) into aligned atlas pages (`orm.png`) and unpacks separate linear `roughness`, `metalness`, `occlusion`, `height` and `normal` PNG channels while preserving baked AO, POM height and convex-edge wear. `exportGlb` writes lit glTF 2.0 `pbrMetallicRoughness` (`metallicFactor: 1`, `roughnessFactor: 1`, shared ORM + `normalTexture` + `occlusionTexture`) whenever PBR/AO is present.
 
 ## 10. Agentic Planner → Actor → Critic loop over CLI/MCP
 

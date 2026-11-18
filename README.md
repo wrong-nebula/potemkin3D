@@ -73,7 +73,7 @@ Image models receive a clay/state render, material instructions, part names and 
 
 ### 4. Separate painted color from surface response
 
-The pipeline aims for approximately unlit color by painting under overcast lighting. Normal, roughness and optional AO maps supply additional shading. Aligned-map processing derives normals from the same height field used for relief, with physical scale and slope limits controlled by material presets. Presets leave the painted atlas intact. See [material maps](docs/material-maps.md) for data conventions, persistence and limitations.
+The pipeline aims for approximately unlit color by painting under overcast lighting (or stripping residual shading via `--uv-refine`). `pbr.ts` and `aligned-maps.ts` produce aligned height (for POM), refined tangent normals, roughness, metallic and convex-edge wear channels — either via a $0 albedo-and-geometry intrinsic decomposition (`--pbr-mode intrinsic`, automatic under `--provider local`) or fused with hosted PATINA predictions — and export both packed glTF ORM and separate linear maps alongside optional baked AO. Presets leave the painted atlas intact. See [material maps](docs/material-maps.md) for data conventions, persistence and limitations.
 
 ### 5. Make Luxor's carving read at close range
 

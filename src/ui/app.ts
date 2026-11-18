@@ -395,10 +395,11 @@ export function mountUi(session: Session, panel: HTMLElement) {
     if (!session.engine) return;
     key.value ? localStorage.setItem('trompe.falKey', key.value) : localStorage.removeItem('trompe.falKey');
     configureFal(key.value || undefined);
+    const provCfg = syncProvider();
     pbrBtn.disabled = runBtn.disabled = true;
     try {
-      say('reading the texture for relief and roughness…');
-      const m = await session.makePbr({}, (done, total) => { pbrBtn.textContent = `Maps: tile ${done}/${total}…`; });
+      say('reading the texture and geometry for relief, roughness, metallic and edge wear…');
+      const m = await session.makePbr({ mode: provCfg.provider === 'local' ? 'intrinsic' : 'auto' }, (done, total) => { pbrBtn.textContent = `Maps: tile ${done}/${total}…`; });
       session.viewer?.setRelief(+relief.value);
       if (session.record) vCost.textContent = money(session.record.cost + m.cost);
       setMode('lit');
@@ -618,14 +619,20 @@ export function mountUi(session: Session, panel: HTMLElement) {
     c.toBlob((b) => b && download(b, `${session.level!.name}_texture.png`), 'image/png');
   };
   mapsDl.onclick = () => {
-    const pbr = session.engine?.pbr;
-    if (!pbr) return;
-    const maps: [Uint8ClampedArray, string][] = [[pbr.normal, 'normal'], [pbr.orm, 'orm']];
-    if (pbr.source?.height) maps.push([pbr.source.height, 'height_source']);
+    if (!session.engine?.pbr) return;
+    const ch = session.exportPbrChannels();
+    const maps: [Uint8ClampedArray, string][] = [
+      [ch.normal, 'normal'],
+      [ch.orm, 'orm'],
+      [ch.roughness, 'roughness'],
+      [ch.metalness, 'metalness'],
+      [ch.occlusion, 'occlusion'],
+      [ch.height, 'height'],
+    ];
     for (const [data, name] of maps) {
       const c = h('canvas');
-      c.width = c.height = pbr.size;
-      c.getContext('2d')!.putImageData(new ImageData(data as Uint8ClampedArray<ArrayBuffer>, pbr.size, pbr.size), 0, 0);
+      c.width = c.height = ch.size;
+      c.getContext('2d')!.putImageData(new ImageData(data as Uint8ClampedArray<ArrayBuffer>, ch.size, ch.size), 0, 0);
       c.toBlob((b) => b && download(b, `${session.level!.name}_${name}.png`), 'image/png');
     }
   };

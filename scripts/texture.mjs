@@ -90,6 +90,7 @@ const { values: a } = parseArgs({
     'plan-only': { type: 'boolean', default: false },
     resume: { type: 'string' },
     pbr: { type: 'boolean', default: false },
+    'pbr-mode': { type: 'string', default: 'auto' }, // 'auto', 'intrinsic' ($0 local albedo+geometry PBR), or 'patina'
     ao: { type: 'boolean', default: false },
     'ao-size': { type: 'string', default: '1024' },
     'no-check': { type: 'boolean', default: false },
@@ -120,7 +121,7 @@ if (!given('provider') && a.resume) {
 }
 const isLocalModelFlag = (m) => typeof m === 'string' && (m.startsWith('local-') || m.startsWith('hunyuan3d'));
 a.provider ??= isLocalModelFlag(a.first) && isLocalModelFlag(a.fill) ? 'local' : 'fal';
-const strictLocal = a.provider === 'local' && a['provider-fallback'] !== 'fal' && !a.pbr;
+const strictLocal = a.provider === 'local' && a['provider-fallback'] !== 'fal' && (!a.pbr || a['pbr-mode'] !== 'patina');
 if (!a['plan-only'] && !strictLocal && !(await falKey())) {
   console.error('FAL_KEY is not set (export FAL_KEY=your-fal-key, put FAL_KEY=... in .env.local, or use --provider local)');
   process.exit(1);
@@ -268,7 +269,7 @@ try {
     log(`run: ${JSON.stringify(res)}`);
     if (a.consolidate) log(`consolidate: ${JSON.stringify(await page.evaluate(() => window.trompe.consolidate()))}`);
     if (a.ao) log(`ambient occlusion: ${JSON.stringify(await page.evaluate((size) => window.trompe.ao({ size }), +a['ao-size']))}`);
-    if (a.pbr) log(`maps: ${JSON.stringify(await page.evaluate((size) => window.trompe.pbr({ size }), +a['pbr-size']))}`);
+    if (a.pbr) log(`maps: ${JSON.stringify(await page.evaluate(([size, mode]) => window.trompe.pbr({ size, mode }), [+a['pbr-size'], a['pbr-mode']]))}`);
     if (+a.ground > 0) log(`ground: ${JSON.stringify(await page.evaluate(([o, runId]) => window.trompe.ground(o, undefined, runId), [{ tiles: +a.ground, ...(a['ground-span'] ? { span: +a['ground-span'] } : {}) }, id]))}`);
     if (+a.props > 0) log(`prop pass: ${JSON.stringify(await page.evaluate(([max, runId]) => window.trompe.props({ max }, undefined, runId), [+a.props, id]))}`);
     if (+a.parts > 0) log(`part pass: ${JSON.stringify(await page.evaluate(([max, runId]) => window.trompe.parts({ max }, undefined, runId), [+a.parts, id]))}`);

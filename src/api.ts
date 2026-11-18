@@ -72,7 +72,7 @@ export function makeApi(session: Session) {
     materialPresetOptions: MATERIAL_PRESETS,
     materialPresets: (assignments: MaterialAssignments) => session.setMaterialPresets(assignments),
     /** Import matching atlas maps without resizing them or inferring height from the painting. */
-    async materialMaps(o: { size: number; layoutHash: string; heightUrl?: string; normalUrl?: string; roughnessUrl?: string; roughnessBase?: number }) {
+    async materialMaps(o: { size: number; layoutHash: string; heightUrl?: string; normalUrl?: string; roughnessUrl?: string; metalnessUrl?: string; roughnessBase?: number }) {
       const engine = session.engine;
       if (!engine) throw new Error('Load a level first');
       const revision = engine.atlas.revision;
@@ -80,7 +80,7 @@ export function makeApi(session: Session) {
       const source: AlignedMapSource = { size: o.size, layoutHash: o.layoutHash,
         kind: o.heightUrl ? 'dedicated-height' : o.normalUrl ? 'legacy-normal' : 'flat', roughnessBase: o.roughnessBase ?? .88,
         roughnessMode: o.roughnessBase === undefined ? 'absolute' : 'relative' };
-      for (const [channel, url] of [['height', o.heightUrl], ['normal', o.normalUrl], ['roughness', o.roughnessUrl]] as const) {
+      for (const [channel, url] of [['height', o.heightUrl], ['normal', o.normalUrl], ['roughness', o.roughnessUrl], ['metalness', o.metalnessUrl]] as const) {
         if (!url) continue;
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Material ${channel} image failed: ${response.status}`);
@@ -90,6 +90,8 @@ export function makeApi(session: Session) {
           source[channel] = bitmapToRGBA(image, o.size, o.size);
           if (channel === 'roughness') for (let i = 0; i < source[channel]!.length; i += 4) {
             const pixels = source[channel]!; pixels[i + 1] = pixels[i]; pixels[i] = pixels[i + 3] = 255; pixels[i + 2] = 0;
+          } else if (channel === 'metalness') for (let i = 0; i < source[channel]!.length; i += 4) {
+            const pixels = source[channel]!; pixels[i + 2] = pixels[i]; pixels[i + 3] = 255;
           }
         } finally { image.close(); }
       }
@@ -210,11 +212,45 @@ export function makeApi(session: Session) {
       const r = await session.nameParts(look, (done, total) => emit({ type: 'parts', message: `naming shape ${done}/${total}` }));
       return { names: r.names, cost: r.cost, seconds: r.seconds };
     },
-    /** Normal and roughness maps for the painted texture (one material-model call per tile). */
+    /** Full PBR channel set (height/POM, refined normal, roughness, metallic and convex-edge wear). */
     async pbr(opts: Partial<PbrOptions> = {}, falKey?: string) {
       configureFal(falKey);
       const m = await session.makePbr(opts, (done, total) => emit({ type: 'pbr', done, total }));
-      return { size: m.size, tiles: m.tiles, cost: m.cost, seconds: m.seconds };
+      let metalSum = 0, metalPx = 0, count = 0;
+      for (let i = 0; i < m.orm.length; i += 4) {
+        if (!m.orm[i + 3]) continue;
+        count++;
+        const v = m.orm[i + 2] / 255;
+        metalSum += v;
+        if (v >= 0.35) metalPx++;
+      }
+      return {
+        size: m.size,
+        kind: m.source?.kind ?? 'predicted-height',
+        tiles: m.tiles,
+        cost: m.cost,
+        seconds: m.seconds,
+        meanMetalness: count ? +(metalSum / count).toFixed(4) : 0,
+        metallicShare: count ? +(metalPx / count).toFixed(4) : 0,
+      };
+    },
+    /** Export aligned PBR maps as packed glTF ORM and/or separate linear PNG data URLs. */
+    exportPbr(opts: { format?: 'orm' | 'separate' | 'both' } = {}) {
+      const format = opts.format ?? 'both';
+      const ch = session.exportPbrChannels();
+      const png = (rgba: Uint8ClampedArray) => toDataUrl(rgba, ch.size, ch.size, 'image/png');
+      return {
+        size: ch.size,
+        format,
+        normal: png(ch.normal),
+        ...(format !== 'separate' ? { orm: png(ch.orm) } : {}),
+        ...(format !== 'orm' ? {
+          roughness: png(ch.roughness),
+          metalness: png(ch.metalness),
+          occlusion: png(ch.occlusion),
+          height: png(ch.height),
+        } : {}),
+      };
     },
     /** Walk the level from the plan's point nearest `near` (or the first), for stills and tests; null to stop. */
     walk(o: { near?: [number, number, number]; yaw?: number } | null = {}) {

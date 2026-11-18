@@ -5,7 +5,7 @@ import { aoImage, bakeAo, withOcclusion, type AoOptions } from './core/ao';
 import { Engine } from './core/engine';
 import { exportGlb } from './core/export';
 import { nameParts } from './core/naming';
-import { makePbr, pbrMetadata, type PbrOptions } from './core/pbr';
+import { makePbr, pbrMetadata, unpackLinearPbrChannels, type PbrOptions } from './core/pbr';
 import { buildAlignedMaps, validateAlignedSource, type AlignedMapSource } from './core/aligned-maps';
 import { suggestMaterialPreset, validateMaterialAssignments, type MaterialAssignments } from './core/material-presets';
 import { Gpu } from './core/gpu';
@@ -428,12 +428,18 @@ export class Session {
     if (!this.engine || !this.viewer) throw new Error('load a level first');
     this.abort = new AbortController();
     const engine = this.engine, revision = engine.atlas.revision;
-    const maps = await makePbr(engine, opts, onProgress, this.abort.signal);
+    const maps = await makePbr(engine, opts, onProgress, this.abort.signal, this.runProvider());
     if (this.engine !== engine || engine.atlas.revision !== revision) throw new Error('The painting changed while material maps were being made; maps were not applied');
     this.engine.pbr = maps;
     this.viewer.setPbr(maps);
     if (this.record) this.record.pbr = pbrMetadata(maps);
     return maps;
+  }
+
+  /** Unpack the current PBR set into packed glTF ORM and/or separate linear maps (roughness, metalness, occlusion, height, normal). */
+  exportPbrChannels() {
+    if (!this.engine?.pbr) throw new Error('make or load PBR maps first');
+    return unpackLinearPbrChannels(this.engine.pbr, this.engine.ao);
   }
 
   /** Change material responses locally. Keep source maps, so repeated edits never accumulate filtering. */
@@ -461,7 +467,15 @@ export class Session {
     if (!this.engine || !this.viewer || !this.level) throw new Error('Load a level first');
     validateAlignedSource(source);
     if (source.layoutHash !== layoutHash(this.level.geometry.getAttribute('uv').array)) throw new Error('The material maps belong to another UV layout');
-    const owned = { ...source, height: source.height?.slice(), normal: source.normal?.slice(), roughness: source.roughness?.slice() };
+    const owned = {
+      ...source,
+      height: source.height?.slice(),
+      normal: source.normal?.slice(),
+      refinedNormal: source.refinedNormal?.slice(),
+      roughness: source.roughness?.slice(),
+      metalness: source.metalness?.slice(),
+      edgeWear: source.edgeWear?.slice(),
+    };
     const built = buildAlignedMaps(owned, this.engine.atlas.texelGeometry(source.size), this.level.labels, this.engine.materialPresets);
     this.engine.pbr = { ...built, source: owned, size: source.size, tiles: 0, cost: 0, seconds: 0, strength: 1 };
     this.viewer.setPbr(this.engine.pbr);
@@ -1463,7 +1477,7 @@ export class Session {
       await this.put(id, 'normal.png', await toBlob(pbr.normal, pbr.size, pbr.size, 'image/png'));
       // the saved ORM map carries the occlusion too, as the exported material's does
       await this.put(id, 'orm.png', await toBlob(ao ? withOcclusion(pbr.orm, pbr.size, ao) : pbr.orm, pbr.size, pbr.size, 'image/png'));
-      for (const channel of ['height', 'normal', 'roughness'] as const) {
+      for (const channel of ['height', 'normal', 'refinedNormal', 'roughness', 'metalness', 'edgeWear'] as const) {
         const pixels = pbr.source?.[channel];
         if (pixels) await this.put(id, `pbr_source_${channel}.png`, await toBlob(pixels, pbr.size, pbr.size, 'image/png'));
       }
@@ -1549,8 +1563,12 @@ export class Session {
       this.engine.pbr = { ...meta.pbr, normal: await urlToRGBA(`/runs/${id}/normal.png`, s, s),
         orm: await urlToRGBA(`/runs/${id}/orm.png`, s, s) };
       if (meta.pbr.source) {
-        const source: AlignedMapSource = { ...meta.pbr.source, height: undefined, normal: undefined, roughness: undefined };
-        for (const channel of ['height', 'normal', 'roughness'] as const) if (meta.pbr.source[channel])
+        const source: AlignedMapSource = {
+          ...meta.pbr.source,
+          height: undefined, normal: undefined, refinedNormal: undefined,
+          roughness: undefined, metalness: undefined, edgeWear: undefined,
+        };
+        for (const channel of ['height', 'normal', 'refinedNormal', 'roughness', 'metalness', 'edgeWear'] as const) if (meta.pbr.source[channel])
           source[channel] = await urlToRGBA(`/runs/${id}/pbr_source_${channel}.png`, s, s);
         validateAlignedSource(source);
         if (source.layoutHash !== layoutHash(this.level!.geometry.getAttribute('uv').array)) throw new Error('Saved material sources use a different UV layout');

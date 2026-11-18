@@ -1,10 +1,14 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import { runMaterial } from '../providers/fal';
 import { MATERIAL_MODEL } from '../providers/models';
+import { isLocalRoute, type ProviderOptions } from '../providers/router';
 import type { Engine } from './engine';
 import { bitmapToRGBA, toCanvas } from './image';
-import { buildAlignedMaps, type AlignedMapSource } from './aligned-maps';
+import { buildAlignedMaps, unpackLinearPbrChannels, type AlignedMapSource } from './aligned-maps';
 import { layoutHash } from './layout';
+import { materialResponse, suggestMaterialPreset, type MaterialAssignments } from './material-presets';
+import type { Level } from './scene';
+import { cellWeights, surfaceWeights } from './surface-weights';
 
 /**
  * Aligned material maps for the existing paint atlas. PATINA predicts height and roughness in a single call
@@ -23,15 +27,19 @@ export interface PbrOptions {
   roughnessGain: number;
   /** Tiles sent to the model at the same time. */
   parallel: number;
+  /** Estimator route: 'intrinsic' ($0 albedo + geometry decomposition), 'patina' (cloud height/roughness + intrinsic metallic/wear/normals), or 'auto'. */
+  mode?: 'auto' | 'intrinsic' | 'patina';
+  /** Convex-edge wear & bare-metal exposure strength in `[0, 1]` (default 0.65). */
+  wear?: number;
 }
 
-export const DEFAULT_PBR: PbrOptions = { size: 4096, seed: 7, strength: 1, baseRoughness: 0.88, roughnessGain: 0.9, parallel: 4 };
+export const DEFAULT_PBR: PbrOptions = { size: 4096, seed: 7, strength: 1, baseRoughness: 0.88, roughnessGain: 0.9, parallel: 4, mode: 'auto', wear: 0.65 };
 
 export interface PbrMaps {
   size: number;
   /** Tangent-space normal map, RGBA8 in glTF image order and glTF's convention (+Y up in the image). */
   normal: Uint8ClampedArray;
-  /** glTF occlusion/roughness/metalness packing: R = 255 (no occlusion), G = roughness, B = 0 (not metal). */
+  /** glTF occlusion/roughness/metalness packing: R = occlusion (255 before AO), G = roughness, B = metalness. */
   orm: Uint8ClampedArray;
   tiles: number;
   cost: number;
@@ -43,11 +51,22 @@ export interface PbrMaps {
 
 export function pbrMetadata(maps: PbrMaps) {
   const source = maps.source;
+  let metalSum = 0, metalPixels = 0, total = 0;
+  for (let i = 0; i < maps.orm.length; i += 4) {
+    if (!maps.orm[i + 3]) continue;
+    total++;
+    const m = maps.orm[i + 2] / 255;
+    metalSum += m;
+    if (m >= 0.35) metalPixels++;
+  }
   return { size: maps.size, tiles: maps.tiles, cost: maps.cost, seconds: maps.seconds, strength: maps.strength,
+    meanMetalness: total ? +(metalSum / total).toFixed(4) : 0,
+    metallicShare: total ? +(metalPixels / total).toFixed(4) : 0,
     ...(source ? { source: { size: source.size, layoutHash: source.layoutHash, kind: source.kind,
       roughnessBase: source.roughnessBase, defaultRoughness: source.defaultRoughness,
       roughnessMode: source.roughnessMode,
-      height: !!source.height, normal: !!source.normal, roughness: !!source.roughness } } : {}) };
+      height: !!source.height, normal: !!source.normal, refinedNormal: !!source.refinedNormal,
+      roughness: !!source.roughness, metalness: !!source.metalness, edgeWear: !!source.edgeWear } } : {}) };
 }
 export type PbrMetadata = ReturnType<typeof pbrMetadata>;
 
@@ -283,14 +302,257 @@ export function alignedHeightSource(raw: Uint8ClampedArray, mask: Uint8Array, si
   return { size, layoutHash: uvHash, kind: 'predicted-height', height, roughness, roughnessBase: 128 / 255, defaultRoughness: baseRoughness };
 }
 
-/** Predict height and roughness together, then derive normals from that same height. One model call per tile. */
+const BARE_METAL_RE = /\b(bare|polished|brushed|forged|stainless|chrome|brass|bronze|copper|steel|iron|aluminum|aluminium|titanium|metal|blade|barrel|anvil|chain|pipe|girder|beam|rail|hinge|bolt|rivet)\b/i;
+const COATED_METAL_RE = /\b(painted[- ]?metal|locker|cabinet|console|hull|chassis|armour|armor|visor|turret|rover|mech|robot|gantry|crane|shutter|door[- ]?frame|window[- ]?frame|grille|vent|duct)\b/i;
+const DIELECTRIC_RE = /\b(stone|sandstone|limestone|brick|plaster|stucco|concrete|cement|cobble|paving|tile|terracotta|ceramic|wood|timber|plank|board|bark|leaf|leaves|foliage|grass|moss|sand|dirt|soil|cloth|fabric|canvas|tarp|leather|skin|flesh)\b/i;
+
+/**
+ * Lightweight intrinsic-decomposition PBR estimator conditioned on consolidated `albedo` + 3D `geometry` (`pos`, `nrm`),
+ * geometry prepasses (`openness`, `curvature`, `faceClass`) and part semantics (`labels`, `presets`).
+ * Produces aligned `height` (preserving POM), `roughness`, `metalness`, `refinedNormal` and `edgeWear` in one atlas layout.
+ */
+export function estimateIntrinsicPbr(
+  albedo: ArrayLike<number>,
+  mask: ArrayLike<number>,
+  geometry: { pos: Float32Array; nrm: Float32Array },
+  uvHash: string,
+  opts: {
+    size: number;
+    labels: string[];
+    presets?: MaterialAssignments;
+    openness?: ArrayLike<number>;
+    curvature?: ArrayLike<number>;
+    faceClass?: ArrayLike<number>;
+    baseRoughness?: number;
+    roughnessGain?: number;
+    wear?: number;
+  },
+): AlignedMapSource {
+  const { size, labels } = opts;
+  const presets = opts.presets ?? {};
+  const baseRoughness = opts.baseRoughness ?? DEFAULT_PBR.baseRoughness;
+  const roughnessGain = opts.roughnessGain ?? DEFAULT_PBR.roughnessGain;
+  const wearGain = opts.wear ?? DEFAULT_PBR.wear ?? 0.65;
+  const N = size * size;
+
+  const height = new Uint8ClampedArray(N * 4);
+  const roughness = new Uint8ClampedArray(N * 4);
+  const metalness = new Uint8ClampedArray(N * 4);
+  const refinedNormal = new Uint8ClampedArray(N * 4);
+  const edgeWear = new Uint8ClampedArray(N * 4);
+
+  // Per-part semantic metallicity & roughness priors.
+  const partPrior = labels.map((raw) => {
+    const name = raw ?? '';
+    const assigned = presets[name] ?? suggestMaterialPreset(name);
+    const resp = materialResponse(name, presets);
+    if (assigned === 'metal') return { baseMetal: Math.max(0.88, resp.metalness ?? 0.9), wearMetal: 0.96, baseRough: resp.roughness, coated: false, dielectric: false };
+    if (assigned === 'painted-metal') return { baseMetal: 0.06, wearMetal: 0.78, baseRough: resp.roughness, coated: true, dielectric: false };
+    if (assigned === 'hard-surface') return { baseMetal: BARE_METAL_RE.test(name) ? 0.82 : 0.08, wearMetal: 0.65, baseRough: resp.roughness, coated: true, dielectric: false };
+    if (assigned) return { baseMetal: 0, wearMetal: 0, baseRough: resp.roughness, coated: false, dielectric: true };
+    if (DIELECTRIC_RE.test(name) && !BARE_METAL_RE.test(name)) return { baseMetal: 0, wearMetal: 0, baseRough: baseRoughness, coated: false, dielectric: true };
+    if (BARE_METAL_RE.test(name) && !/\bpainted\b/i.test(name)) return { baseMetal: 0.86, wearMetal: 0.95, baseRough: 0.34, coated: false, dielectric: false };
+    if (COATED_METAL_RE.test(name) || /\bpainted\b/i.test(name)) return { baseMetal: 0.06, wearMetal: 0.74, baseRough: 0.46, coated: true, dielectric: false };
+    return { baseMetal: -1, wearMetal: 0.45, baseRough: baseRoughness, coated: false, dielectric: false };
+  });
+
+  // Precompute luminance & chroma + 2-texel island-interior trust so UV borders never produce false normal bevels.
+  const lum = new Float32Array(N);
+  const sat = new Float32Array(N);
+  const rust = new Float32Array(N);
+  const trust = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const r = albedo[4 * i] / 255, g = albedo[4 * i + 1] / 255, b = albedo[4 * i + 2] / 255;
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    lum[i] = y;
+    const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+    sat[i] = hi > 1e-4 ? (hi - lo) / hi : 0;
+    // Warm orange-brown oxide detection: rust is dielectric and rough even on steel/iron parts!
+    rust[i] = r > g * 1.22 && g > b * 1.12 && sat[i] > 0.28 && y < 0.58
+      ? Math.min(1, ((r - b) / Math.max(0.08, hi)) * 1.3)
+      : 0;
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (!mask[i] || geometry.nrm[4 * i + 3] < 0.5) continue;
+      let ok = 1;
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-2, 0], [2, 0], [0, -2], [0, 2]] as const) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size || !mask[ny * size + nx] || geometry.nrm[4 * (ny * size + nx) + 3] < 0.5) {
+          ok = Math.abs(dx) + Math.abs(dy) <= 1 ? 0 : Math.min(ok, 0.45);
+        }
+      }
+      trust[i] = ok;
+    }
+  }
+
+  // Smooth luminance over a 5x5 same-normal neighbourhood to separate fine surface relief/grooves from broad colour changes.
+  const smoothLum = Float32Array.from(lum);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (!trust[i]) continue;
+      const pIdx = Math.round(geometry.pos[4 * i + 3]) - 1;
+      let acc = lum[i] * 2, wSum = 2;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+          const j = ny * size + nx;
+          if (!mask[j] || Math.round(geometry.pos[4 * j + 3]) - 1 !== pIdx) continue;
+          const dot = geometry.nrm[4 * i] * geometry.nrm[4 * j] + geometry.nrm[4 * i + 1] * geometry.nrm[4 * j + 1] + geometry.nrm[4 * i + 2] * geometry.nrm[4 * j + 2];
+          if (dot < 0.88) continue;
+          acc += lum[j]; wSum += 1;
+        }
+      }
+      smoothLum[i] = acc / wSum;
+    }
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const p = y * size + x, i = 4 * p;
+      height[i] = height[i + 1] = height[i + 2] = 128;
+      height[i + 3] = mask[p] ? 255 : 0;
+      roughness[i] = roughness[i + 3] = 255; roughness[i + 1] = 128;
+      metalness[i + 3] = 255;
+      refinedNormal[i] = refinedNormal[i + 1] = 128; refinedNormal[i + 2] = refinedNormal[i + 3] = 255;
+      edgeWear[i + 3] = 255;
+
+      if (!mask[p] || geometry.nrm[i + 3] < 0.5) continue;
+      const label = Math.max(0, Math.round(geometry.pos[i + 3]) - 1);
+      const prior = partPrior[label] ?? { baseMetal: -1, wearMetal: 0.45, baseRough: baseRoughness, coated: false, dielectric: false };
+      const open = opts.openness ? opts.openness[p] : 0.78;
+      const curv = opts.curvature ? opts.curvature[p] : 0;
+      const cls = opts.faceClass ? Math.round(opts.faceClass[p]) : 1;   // 5 = hard-surface
+
+      // Local normal crease + high-pass luminance contrast across same-part neighbours.
+      let microVar = 0, nCrease = 0, gradX = 0, gradY = 0, nNbr = 0;
+      const sameNormalLum = (nx: number, ny: number): number => {
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size) return lum[p];
+        const j = ny * size + nx;
+        if (!mask[j] || Math.round(geometry.pos[4 * j + 3]) - 1 !== label) return lum[p];
+        const dot = geometry.nrm[i] * geometry.nrm[4 * j] + geometry.nrm[i + 1] * geometry.nrm[4 * j + 1] + geometry.nrm[i + 2] * geometry.nrm[4 * j + 2];
+        if (dot < 0.88) { nCrease = Math.max(nCrease, 1 - Math.max(0, dot)); return lum[p]; }
+        microVar += Math.abs(lum[j] - lum[p]);
+        nNbr++;
+        return lum[j];
+      };
+      const lL = sameNormalLum(x - 1, y), lR = sameNormalLum(x + 1, y);
+      const lD = sameNormalLum(x, y - 1), lU = sameNormalLum(x, y + 1);
+      gradX = (lR - lL) * trust[p];
+      gradY = (lU - lD) * trust[p];
+      const meanVar = nNbr > 0 ? microVar / nNbr : 0;
+
+      // 1. Convex-edge wear (`edgeWear` R): exposed ridges (`curv * open` + 3D dihedral creases + bright chip edges).
+      const chip = Math.max(0, lum[p] - smoothLum[p]) * 2.2;
+      const wear = Math.min(1, Math.max(0, wearGain * (0.75 * curv * Math.max(0.25, open) + 0.45 * nCrease * open + 0.35 * chip * (curv > 0.08 ? 1 : 0.25))));
+      edgeWear[i] = edgeWear[i + 1] = edgeWear[i + 2] = Math.round(255 * wear);
+
+      // 2. Metallicity (`metalness` B): semantic/class prior modulated by oxidation/cavity grime and convex edge wear.
+      let mVal = prior.baseMetal;
+      if (mVal < 0) {
+        // Unnamed part: infer from `hard-surface` semantic class + low chroma metallic reflectance cues.
+        const achromaticSheen = cls === 5 && sat[p] < 0.18 && lum[p] > 0.18 && lum[p] < 0.85 ? 0.62 : 0;
+        mVal = achromaticSheen;
+      }
+      if (!prior.dielectric) {
+        if (prior.coated) mVal = Math.max(mVal, wear * prior.wearMetal);
+        else if (mVal > 0) mVal = Math.min(1, mVal + 0.12 * wear);
+        // Rust and deep dark cavity grime are non-metallic oxides/dirt.
+        const cavityDirt = Math.max(0, 0.5 - open) * (lum[p] < 0.25 ? 1.4 : 0.5);
+        mVal *= (1 - 0.88 * rust[p]) * Math.max(0.15, 1 - cavityDirt);
+      } else {
+        mVal = 0;
+      }
+      mVal = Math.min(1, Math.max(0, mVal));
+      metalness[i + 2] = metalness[i] = metalness[i + 1] = Math.round(255 * mVal);
+
+      // 3. Roughness (`roughness` G, centered around `baseRoughness`): micro-variance + cavity dirt + rust - edge wear - metallic sheen.
+      const detailRough = (meanVar - 0.035) * 2.4 * roughnessGain * trust[p];
+      const cavityRough = 0.14 * (1 - open);
+      const effBase = prior.baseRough + rust[p] * Math.max(0.22, 0.84 - prior.baseRough);
+      const metalSmooth = mVal * (0.18 - 0.12 * meanVar);
+      const absRough = Math.min(0.98, Math.max(0.12, effBase + detailRough + cavityRough - metalSmooth - 0.10 * wear));
+      roughness[i + 1] = Math.max(12, Math.min(252, Math.round(absRough * 255)));
+
+      // 4. Intrinsic groove/relief `height` (preserving POM!) and crisp `refinedNormal`.
+      const highPass = (lum[p] - smoothLum[p]) * trust[p];
+      // Dark thin seams/grout/panel-lines recess strongly; bright specks rise gently so painted highlights don't bulge.
+      const hDelta = highPass < 0 ? highPass * 210 : highPass * 95;
+      height[i] = height[i + 1] = height[i + 2] = Math.max(12, Math.min(244, Math.round(128 + hDelta - wear * 8)));
+
+      let mnx = -gradX * 2.6, mny = gradY * 2.6;
+      const mMag = Math.hypot(mnx, mny);
+      if (mMag > 0.75) { mnx *= 0.75 / mMag; mny *= 0.75 / mMag; }
+      const mnz = Math.sqrt(Math.max(0.2, 1 - mnx * mnx - mny * mny));
+      refinedNormal[i] = Math.round((mnx * 0.5 + 0.5) * 255);
+      refinedNormal[i + 1] = Math.round((mny * 0.5 + 0.5) * 255);
+      refinedNormal[i + 2] = Math.round((mnz * 0.5 + 0.5) * 255);
+    }
+  }
+
+  return {
+    size,
+    layoutHash: uvHash,
+    kind: 'intrinsic-pbr',
+    height,
+    roughness,
+    metalness,
+    refinedNormal,
+    edgeWear,
+    roughnessBase: baseRoughness,
+    defaultRoughness: baseRoughness,
+  };
+}
+
+function projectGeometryPrepasses(level: Level, lighting: Engine['clay']['lighting'], size: number) {
+  const sw = level.surfaceWeights && level.surfaceWeights.importance.length === level.triangles
+    ? level.surfaceWeights
+    : surfaceWeights(level, lighting);
+  level.surfaceWeights = sw;
+  const uv = level.geometry.getAttribute('uv').array;
+  return {
+    openness: cellWeights(uv, sw.openness, size),
+    curvature: cellWeights(uv, sw.curvature, size),
+    faceClass: cellWeights(uv, Float32Array.from(sw.faceClass), size),
+  };
+}
+
+/** Predict or decompose full PBR channels (height/POM, refined normal, roughness, metallic and convex-edge wear). */
 export async function makePbr(engine: Engine, opts: Partial<PbrOptions> = {}, onProgress?: (done: number, total: number) => void,
-  signal?: AbortSignal): Promise<PbrMaps> {
+  signal?: AbortSignal, providerOpts?: ProviderOptions): Promise<PbrMaps> {
   const o = { ...DEFAULT_PBR, ...opts };
   const t0 = performance.now();
   const { data, size } = engine.atlas.readBytes([0.5, 0.5, 0.5], Math.min(o.size, engine.atlas.size), true);
   const mask = new Uint8Array(size * size);
-  for (let p = 0; p < mask.length; p++) { mask[p] = data[4 * p + 3] ? 1 : 0; data[4 * p + 3] = 255; }
+  let anyPainted = false;
+  for (let p = 0; p < mask.length; p++) { if (data[4 * p + 3]) { mask[p] = 1; anyPainted = true; } data[4 * p + 3] = 255; }
+  if (!anyPainted) throw new Error('nothing is painted yet: texture the level first');
+
+  const geom = engine.atlas.texelGeometry(size);
+  const uvHash = layoutHash(engine.level.geometry.getAttribute('uv').array);
+  const pre = projectGeometryPrepasses(engine.level, engine.clay.lighting, size);
+  const intrinsic = estimateIntrinsicPbr(data, mask, geom, uvHash, {
+    size,
+    labels: engine.level.labels,
+    presets: engine.materialPresets,
+    ...pre,
+    baseRoughness: o.baseRoughness,
+    roughnessGain: o.roughnessGain,
+    wear: o.wear,
+  });
+
+  const useIntrinsicOnly = o.mode === 'intrinsic' || (o.mode !== 'patina' && isLocalRoute(providerOpts));
+  if (useIntrinsicOnly) {
+    onProgress?.(1, 1);
+    const maps = buildAlignedMaps(intrinsic, geom, engine.level.labels, engine.materialPresets, o.strength);
+    return { size, ...maps, source: intrinsic, strength: o.strength, tiles: 1, cost: 0, seconds: (performance.now() - t0) / 1000 };
+  }
+
   const source = toCanvas(data, size, size);
   const layout = tileLayout(size);
   const { region, sent } = layout;
@@ -299,7 +561,6 @@ export async function makePbr(engine: Engine, opts: Partial<PbrOptions> = {}, on
     for (let y = t.y; y < t.y + region; y += 4) for (let x = t.x; x < t.x + region; x += 4) if (mask[y * size + x]) return true;
     return false;
   });
-  if (!todo.length) throw new Error('nothing is painted yet: texture the level first');
   const results = new Map<(typeof todo)[number], Uint8ClampedArray>();
   let next = 0, done = 0;
   onProgress?.(0, todo.length);
@@ -324,8 +585,17 @@ export async function makePbr(engine: Engine, opts: Partial<PbrOptions> = {}, on
   const raw = new Uint8ClampedArray(size * size * 4);
   for (let i = 0; i < raw.length; i += 4) { raw[i] = 128; raw[i + 1] = 255 * o.baseRoughness; raw[i + 3] = 255; }
   for (const t of todo) blendTile(raw, size, results.get(t)!, region, t, layout.n > 1 ? TILE_OVERLAP : 0);
-  const sourceMaps = alignedHeightSource(raw, mask, size, layoutHash(engine.level.geometry.getAttribute('uv').array), o.baseRoughness, o.roughnessGain);
-  const maps = buildAlignedMaps(sourceMaps, engine.atlas.texelGeometry(size), engine.level.labels, engine.materialPresets, o.strength);
+  const patinaSource = alignedHeightSource(raw, mask, size, uvHash, o.baseRoughness, o.roughnessGain);
+  // Fuse PATINA's height + roughness with geometry-conditioned metallic, convex-edge wear and refined micro-normals.
+  const sourceMaps: AlignedMapSource = {
+    ...patinaSource,
+    metalness: intrinsic.metalness,
+    refinedNormal: intrinsic.refinedNormal,
+    edgeWear: intrinsic.edgeWear,
+  };
+  const maps = buildAlignedMaps(sourceMaps, geom, engine.level.labels, engine.materialPresets, o.strength);
   return { size, ...maps, source: sourceMaps, strength: o.strength, tiles: todo.length, cost: (todo.length * sent * sent * MATERIAL_MODEL.price) / 1e6,
     seconds: (performance.now() - t0) / 1000 };
 }
+
+export { unpackLinearPbrChannels };

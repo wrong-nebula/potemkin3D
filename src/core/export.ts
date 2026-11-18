@@ -31,11 +31,12 @@ export async function exportGlb(engine: Engine): Promise<ArrayBuffer> {
   const aoAll = ao && !pbr ? aoImage(ao) : undefined;
   const material = (k: number): THREE.Material => {
     const map = texture(grid === 1 ? atlas.readBytes().data : atlas.pageBytes(k), atlas.pageSize, true);
-    if (!engine.clay.lighting.overcast) return new THREE.MeshBasicMaterial({ map });
+    if (!engine.clay.lighting.overcast && !pbr && !engine.ao) return new THREE.MeshBasicMaterial({ map });
     if (pbr) {
-      const orm = texture(pageOf(ormAll!, pbr.size, grid, k), pbr.size / grid);
+      const pageOrm = pageOf(ormAll!, pbr.size, grid, k);
+      const orm = texture(pageOrm, pbr.size / grid);
       let hasMetal = false;
-      for (let i = 2; i < ormAll!.length; i += 4) if (ormAll![i] > 0) { hasMetal = true; break; }
+      for (let i = 2; i < pageOrm.length; i += 4) if (pageOrm[i] > 0) { hasMetal = true; break; }
       return new THREE.MeshStandardMaterial({ map, normalMap: texture(pageOf(pbr.normal, pbr.size, grid, k), pbr.size / grid),
         roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: hasMetal ? 1 : 0, ...(ao ? { aoMap: orm } : {}) });
     }

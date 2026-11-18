@@ -81,11 +81,12 @@ export const steps = [
   step('finish'), step('save', { id }),
   step('ao', { options: object(optional({ size, rays: z.number().int().min(1).max(256), radius: positive })).optional() }),
   step('pbr', { options: object(optional({ size, seed: z.number().int(), strength: number.min(0), baseRoughness: fraction,
-    roughnessGain: number.min(0), parallel: z.number().int().min(1).max(16) })).optional() }),
+    roughnessGain: number.min(0), parallel: z.number().int().min(1).max(16), mode: z.enum(['auto','intrinsic','patina']), wear: fraction })).optional() }),
+  step('exportPbr', { output: filename.optional(), options: object(optional({ format: z.enum(['orm','separate','both']) })).optional() }),
   step('nameParts', { style: text.optional() }),
   step('materialPresets', { assignments: z.record(z.string(), z.enum(['limestone','glazed-tile','painted-metal','timber','hard-surface','metal','fabric','organic'])) }),
   step('materialMaps', { options: object({ size, layoutHash: text, ...optional({ heightUrl: text, normalUrl: text,
-    roughnessUrl: text, roughnessBase: fraction }) }) }),
+    roughnessUrl: text, metalnessUrl: text, roughnessBase: fraction }) }) }),
   step('floorDetail', { options: object({label:text,layoutHash:text,packedUrl:text,protectUrl:text,statisticsUrl:text,
     regions:z.number().int().min(1).max(255),spanMetres:positive,heightMetres:number.min(0),sourceAtlasSize:size}).nullable() }),
   step('floorDetailEnabled', { enabled: z.boolean() }),
@@ -124,7 +125,9 @@ export function paidSteps(input) {
     const strictLocal = stepProv === 'local' && stepFb !== 'fal';
     if (['run','topUp','parts','groundNotes','nameParts','promptTest'].includes(s.op)) {
       if (!strictLocal) out.push(s.op);
-    } else if (s.op === 'pbr' || (s.op === 'checkRun' && s.planes)) {
+    } else if (s.op === 'pbr') {
+      if (s.options?.mode !== 'intrinsic' && (!strictLocal || s.options?.mode === 'patina')) out.push(s.op);
+    } else if (s.op === 'checkRun' && s.planes) {
       out.push(s.op);
     } else if ((s.op === 'ground' && !s.options?.reuse) || (s.op === 'props' && !s.options?.dry) || (s.op === 'repair' && !s.dry) || (s.op === 'uvRefine' && (s.options?.modelTiles ?? 0) > 0)) {
       if (!strictLocal) out.push(s.op);
