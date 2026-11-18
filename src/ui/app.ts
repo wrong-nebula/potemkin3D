@@ -121,6 +121,15 @@ export function mountUi(session: Session, panel: HTMLElement) {
   const texBtn = h('button', {}, 'Textured');
   const litBtn = h('button', {}, 'Lit');
   segMode.append(clayBtn, texBtn, litBtn);
+  const weightsSel = h('select', { 'aria-label': 'Surface weights overlay' });
+  for (const [v, l] of [
+    ['off', 'Weights overlay · Off'],
+    ['openness', 'Weights · Openness (AO / cavity)'],
+    ['curvature', 'Weights · Convex curvature'],
+    ['light', 'Weights · Static light'],
+    ['class', 'Weights · Semantic class'],
+    ['importance', 'Weights · Combined importance'],
+  ]) weightsSel.append(h('option', { value: v }, l));
   const camsBox = h('input', { type: 'checkbox', checked: '' });
   const walkBtn = h('button', {}, 'Walk the level');
   const hint = h('div', { id: 'hint' }, 'W A S D to move · Shift to run · Space to jump · click to look around · Esc to leave');
@@ -172,7 +181,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
     h('section', {}, h('label', {}, 'Materials'), materialSurface, materialPreset, materialNote, suggestMaterials, pbrBtn,
       h('div', { class: 'row' }, h('span', { class: 'lab' }, 'Relief'), relief), floorDetailControls, aoBtn,
       h('div', { class: 'note' }, `${MATERIAL_MODEL.label} predicts height and roughness together. Normals come from that height; presets set each surface's response. Original paint stays intact. Baked normal and roughness maps are exported with the .glb.`)),
-    h('section', {}, h('label', {}, 'Display'), segMode, h('label', { class: 'row note' }, camsBox, 'Show cameras'), walkBtn),
+    h('section', {}, h('label', {}, 'Display'), segMode, weightsSel, h('label', { class: 'row note' }, camsBox, 'Show cameras'), walkBtn),
     h('section', {}, h('label', {}, 'Export'), h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
     h('section', {}, h('label', {}, 'fal'), key, h('div', { class: 'note' }, 'Empty: uses FAL_KEY from the dev server. A key here is stored in this browser and sent straight to fal.')),
     log,
@@ -198,6 +207,8 @@ export function mountUi(session: Session, panel: HTMLElement) {
   el.oninput = applySun;
 
   const setMode = (m: 'clay' | 'textured' | 'lit') => {
+    weightsSel.value = 'off';
+    session.viewer?.setWeightOverlay('off');
     session.viewer?.setMode(m);
     clayBtn.classList.toggle('on', m === 'clay');
     texBtn.classList.toggle('on', m === 'textured');
@@ -206,6 +217,15 @@ export function mountUi(session: Session, panel: HTMLElement) {
   clayBtn.onclick = () => setMode('clay');
   texBtn.onclick = () => setMode('textured');
   litBtn.onclick = () => setMode('lit');
+  weightsSel.onchange = () => {
+    try {
+      const r = session.setWeightOverlay(weightsSel.value as 'off' | 'openness' | 'curvature' | 'light' | 'class' | 'importance');
+      if (r.overlay !== 'off') {
+        const cls = Object.entries(r.classes).filter(([, s]) => s >= 0.01).map(([k, s]) => `${k} ${Math.round(100 * s)}%`).join(', ');
+        say(`weights (${r.overlay}, ${r.seconds}s): mean openness ${r.mean.openness}, curvature ${r.mean.curvature}, light ${r.mean.light}, importance ${r.mean.importance} · ${cls}`);
+      }
+    } catch (e) { say(String((e as Error)?.message ?? e)); }
+  };
   camsBox.onchange = () => { if (session.viewer) { session.viewer.overlay.visible = camsBox.checked; session.viewer.dirty = true; } };
 
   // Walk the level from the player spot nearest what the camera looks at, facing that way.
@@ -311,7 +331,11 @@ export function mountUi(session: Session, panel: HTMLElement) {
   };
   suggestMaterials.onclick = () => {
     const assignments = { ...session.engine?.materialPresets };
-    for (const label of session.level?.labels ?? []) { const preset = suggestMaterialPreset(label); if (preset && !assignments[label]) assignments[label] = preset; }
+    const suggested = session.level ? session.suggestMaterialPresets() : {};
+    for (const label of session.level?.labels ?? []) {
+      const preset = suggestMaterialPreset(label) ?? suggested[label];
+      if (preset && !assignments[label]) assignments[label] = preset;
+    }
     void applyMaterials(assignments);
   };
   floorDetailBox.onchange = () => {

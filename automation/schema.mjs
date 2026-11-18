@@ -35,16 +35,17 @@ export const pipelineOptions = object(optional({
   check: z.boolean(), checkThreshold: fraction, checkRetries: count, retryAbove: fraction, minFresh: fraction,
   checkPlanes: z.boolean(), checkCells: z.boolean(), styleReference: z.boolean(), nameParts: z.boolean(),
 }));
+const weightOverlay = z.enum(['off','openness','curvature','light','class','importance']);
 const loadOptions = object(optional({ lighting: z.enum(['overcast','outdoor','indoor','indoor-soft']),
   atlasSize: size, viewSize: size, name: id, layout: z.enum(['file','seen','near']),
   area: z.array(number).min(6), pages: z.union([z.literal(1),z.literal(4),z.literal(16)]),
-  unwrap: z.enum(['auto','always','off']), cavity: z.number().min(0).max(0.99) }));
+  unwrap: z.enum(['auto','always','off']), cavity: z.number().min(0).max(0.99), weights: z.boolean() }));
 const camera = object({ position: vector, target: vector, ...optional({ fov: number.min(10).max(140),
-  width: size, height: size, mode: z.enum(['clay','textured','lit']), overlay: z.boolean() }) });
+  width: size, height: size, mode: z.enum(['clay','textured','lit']), overlay: z.boolean(), weights: weightOverlay }) });
 const step = (op, fields = {}) => object({ op: z.literal(op), ...fields });
 export const steps = [
   step('load', { path: relativePath.optional(), look: relativePath.optional(), options: loadOptions.optional() }),
-  step('loadRun', { id }), step('loadSentoFloor'), step('bounds'),
+  step('loadRun', { id }), step('loadSentoFloor'), step('bounds'), step('weights', { overlay: weightOverlay.optional() }),
   step('plan', { options: planOptions.optional() }),
   step('quote', { options: object(optional({firstModel:text,fillModel:text,holes:count,secondGoes:count,planes:z.boolean(),viewSize:size})).optional() }),
   step('projection', { options: object(optional({ minCos: fraction, edgeGuard: count, frameMargin: number.min(0).max(.49) })) }),

@@ -6,6 +6,7 @@ import { sampling, type Sampling } from './metrics';
 import { paintability } from './paintability';
 import { forEachTriangle, type Level } from './scene';
 import { looksLikeRoof, ROOF_MIN_NY, roofLabels } from './semantics';
+import { cellWeights } from './surface-weights';
 import type { ViewRenderer, ViewSpec } from './views';
 import { lookAt, makeCamera } from './views';
 
@@ -87,7 +88,7 @@ export interface CellList { cells: Int32Array; q: Float32Array; shape?: { sky: n
  * The texture's layout, for planning by sharpness: world position and normal under each of grid x grid cells (a of
  * the normal is 0 where no triangle covers the cell), and how many texels run along one cell.
  */
-export interface Surface { pos: Float32Array; nrm: Float32Array; texelsPerCell: number }
+export interface Surface { pos: Float32Array; nrm: Float32Array; texelsPerCell: number; weight?: Float32Array }
 
 /** The layout of a texture, read from its atlas. */
 export function surfaceOf(atlas: { size: number; texelGeometry(size: number): { pos: Float32Array; nrm: Float32Array } }, grid: number): Surface {
@@ -439,20 +440,22 @@ export interface HoleTarget { center: THREE.Vector3; normal: THREE.Vector3; cell
  * @param nrm world normal per cell, a > 0.5 where a triangle covers it
  * @param quality capture quality per cell, 0 = unpainted
  */
-export function holeTargets(pos: ArrayLike<number>, nrm: ArrayLike<number>, quality: ArrayLike<number>, cell = 3, max = 24): HoleTarget[] {
-  const groups = new Map<string, { sum: THREE.Vector3; normal: THREE.Vector3; cells: number }>();
+export function holeTargets(pos: ArrayLike<number>, nrm: ArrayLike<number>, quality: ArrayLike<number>, cell = 3, max = 24,
+  weight?: ArrayLike<number>): HoleTarget[] {
+  const groups = new Map<string, { sum: THREE.Vector3; normal: THREE.Vector3; cells: number; score: number }>();
   for (let i = 0; i < quality.length; i++) {
     if (nrm[4 * i + 3] < 0.5 || quality[i] > 0) continue;
     const x = pos[4 * i], y = pos[4 * i + 1], z = pos[4 * i + 2];
     // patches are kept apart by which way they face, so the two sides of a wall don't average out
     const key = `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)},${Math.round(nrm[4 * i])},${Math.round(nrm[4 * i + 1])},${Math.round(nrm[4 * i + 2])}`;
     let g = groups.get(key);
-    if (!g) groups.set(key, (g = { sum: new THREE.Vector3(), normal: new THREE.Vector3(), cells: 0 }));
+    if (!g) groups.set(key, (g = { sum: new THREE.Vector3(), normal: new THREE.Vector3(), cells: 0, score: 0 }));
     g.sum.x += x; g.sum.y += y; g.sum.z += z;
     g.normal.x += nrm[4 * i]; g.normal.y += nrm[4 * i + 1]; g.normal.z += nrm[4 * i + 2];
     g.cells++;
+    g.score += weight && weight[i] > 0 ? weight[i] : 1;
   }
-  return [...groups.values()].sort((a, b) => b.cells - a.cells).slice(0, max)
+  return [...groups.values()].sort((a, b) => b.score - a.score).slice(0, max)
     .map((g) => ({ center: g.sum.divideScalar(g.cells), normal: g.normal.normalize(), cells: g.cells }));
 }
 
@@ -557,20 +560,31 @@ export interface Sharp {
  * is already there, times its chance of being painted faithfully.
  */
 export function selectViews(lists: CellList[], o: PlanOptions, aerial: boolean[] = [], existing?: Float32Array,
-  skip?: Uint8Array, sharp?: Sharp) {
+  skip?: Uint8Array, sharp?: Sharp, weights?: ArrayLike<number>) {
   const G2 = o.grid * o.grid;
   const qBest = new Float32Array(G2);
   for (const l of lists) for (let i = 0; i < l.cells.length; i++) qBest[l.cells[i]] = Math.max(qBest[l.cells[i]], l.q[i]);
   if (skip) for (let c = 0; c < G2; c++) if (skip[c]) qBest[c] = 0;   // another pass covers these (roofs)
   let reachable = 0;
   for (let c = 0; c < G2; c++) if (qBest[c] > 0) reachable++;
+  // Normalize cell importance weights over reachable cells to mean 1, so targetCoverage and minimum-gain floors keep their scale.
+  let cellW: Float32Array | null = null;
+  if (weights && reachable > 0) {
+    let wSum = 0;
+    for (let c = 0; c < G2; c++) if (qBest[c] > 0) wSum += weights[c] > 0 ? weights[c] : 1;
+    if (wSum > 0) {
+      cellW = new Float32Array(G2);
+      const norm = reachable / wSum;
+      for (let c = 0; c < G2; c++) if (qBest[c] > 0) cellW[c] = (weights[c] > 0 ? weights[c] : 1) * norm;
+    }
+  }
   const covered = new Uint8Array(G2);
   const good = (l: CellList, i: number) => qBest[l.cells[i]] > 0 && l.q[i] >= Math.min(o.goodRatio * qBest[l.cells[i]], o.goodAbs);
   let have = 0;
   if (existing) {
     // top-up: cells the texture already captures well don't need new views
     for (let c = 0; c < G2; c++) {
-      if (qBest[c] > 0 && existing[c] >= Math.min(o.goodRatio * qBest[c], o.goodAbs)) { covered[c] = 1; have++; }
+      if (qBest[c] > 0 && existing[c] >= Math.min(o.goodRatio * qBest[c], o.goodAbs)) { covered[c] = 1; have += cellW ? cellW[c] : 1; }
     }
   }
   // Sharpness: what each cell already has, in view pixels per texel capped at 1.
@@ -584,17 +598,23 @@ export function selectViews(lists: CellList[], o: PlanOptions, aerial: boolean[]
     for (let c = 0; c < G2; c++) {
       if (!(qBest[c] > 0) || !(sharp.density[c] > 0)) continue;
       haveU![c] = Math.min(1, (sharp.ppmExisting * existing[c]) / sharp.density[c]);
-      have += haveU![c];
+      have += haveU![c] * (cellW ? cellW[c] : 1);
     }
   }
   const gain = (k: number) => {
     const l = lists[k];
     let g = 0;
     if (sharp) {
-      for (let i = 0; i < l.cells.length; i++) if (qBest[l.cells[i]] > 0) g += Math.max(0, detail(k, i) - haveU![l.cells[i]]);
+      for (let i = 0; i < l.cells.length; i++) {
+        const c = l.cells[i];
+        if (qBest[c] > 0) g += Math.max(0, detail(k, i) - haveU![c]) * (cellW ? cellW[c] : 1);
+      }
       g *= sharp.paint[k];
     } else {
-      for (let i = 0; i < l.cells.length; i++) if (!covered[l.cells[i]] && good(l, i)) g++;
+      for (let i = 0; i < l.cells.length; i++) {
+        const c = l.cells[i];
+        if (!covered[c] && good(l, i)) g += cellW ? cellW[c] : 1;
+      }
     }
     return aerial[k] ? g * 0.5 : g;   // prefer what players see; aerial views pick up the rest
   };
@@ -617,10 +637,13 @@ export function selectViews(lists: CellList[], o: PlanOptions, aerial: boolean[]
     if (sharp) {
       for (let i = 0; i < l.cells.length; i++) {
         const c = l.cells[i], u = detail(top.k, i);
-        if (qBest[c] > 0 && u > haveU![c]) { have += u - haveU![c]; haveU![c] = u; }
+        if (qBest[c] > 0 && u > haveU![c]) { have += (u - haveU![c]) * (cellW ? cellW[c] : 1); haveU![c] = u; }
       }
     } else {
-      for (let i = 0; i < l.cells.length; i++) if (good(l, i) && !covered[l.cells[i]]) { covered[l.cells[i]] = 1; have++; }
+      for (let i = 0; i < l.cells.length; i++) {
+        const c = l.cells[i];
+        if (good(l, i) && !covered[c]) { covered[c] = 1; have += cellW ? cellW[c] : 1; }
+      }
     }
   }
   if (!chosen.length) return { order: [] as number[], waves: [] as number[][], qBest, reachable, predicted: [] as number[] };
@@ -696,13 +719,21 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
   const points = samplePlayerPoints(level, o);
   if (!points.length) throw new Error('found nowhere to stand: is the level Y-up with walkable floors?');
   const bySharpness = o.objective === 'sharpness' && !!surface;
+  // Per-triangle geometry importance weights (`weight` attribute riding alongside `label`), projected onto the planner's UV grid.
+  const wAttr = level.geometry.getAttribute('weight');
+  let weights = surface?.weight;
+  if (!weights && wAttr) {
+    const triW = new Float32Array(Math.floor(wAttr.count / 3));
+    for (let t = 0; t < triW.length; t++) triW[t] = wAttr.getX(3 * t);
+    weights = cellWeights(level.geometry.getAttribute('uv').array, triW, o.grid);
+  }
   // Three passes, each with its own budget: the players' views, close views over the roofs, and the aerial ring
   // for what's left (outer walls, tops of props). Players' and aerial views leave roofs to the roof pass.
   // Candidates: every heading from every player spot, and (with the texture's layout known) cameras aimed at each
   // patch of surface from the spots nearest to it.
   const ground = candidateViews(points, o);
   if (surface && o.lookAt > 0) {
-    const patches = holeTargets(surface.pos, surface.nrm, new Float32Array(G2), 3, 400);
+    const patches = holeTargets(surface.pos, surface.nrm, new Float32Array(G2), 3, 400, weights);
     for (const v of lookViews(level, patches, points, o.lookAt)) ground.push({ ...v, id: ground.length });
   }
   const groundLists = probeCells(gpu, views, ground, o, undefined, bySharpness);
@@ -732,7 +763,7 @@ export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<
     passCells = roofCells ? roofCells.slice() : new Uint8Array(G2);
     for (const k of floorSel.order) for (const c of floorLists[k].cells) passCells[c] = 1;
   }
-  const sel = selectViews(groundLists, o, [], existing, passCells, sharp);
+  const sel = selectViews(groundLists, o, [], existing, passCells, sharp, weights);
   const roofSel = roofCands.length
     ? selectViews(roofLists, { ...o, maxViews: o.roofs, targetCoverage: 0.98 }, roofCands.map(() => true), existing) : null;
   // the aerial ring only fills in after the players' views

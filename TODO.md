@@ -77,22 +77,18 @@ Paper references in the source notes have not been checked yet (in particular "L
 
 **Done when:** on Courtyard/Hall, replaying the same views into an importance-weighted layout raises `measure.mjs` px/m on high-rank faces over `--layout near`, and the planner reaches the same weighted coverage with fewer views.
 
-## 7. Geometry prepasses: per-face weights (AO, curvature, class, light)
+## 7. ~~Geometry prepasses: per-face weights (AO, curvature, class, light)~~ (done: `src/core/surface-weights.ts`, `--cavity`, `--weights`, viewer weights overlay)
 
 **Why:** these are cheap facts about the mesh that make good weights for the planner, packer and material pipeline, alongside item 6's player-visibility rank. None of them changes the paint-and-project loop.
 
-All of them run client-side (or as a short local pre-process) and write a per-triangle weight attribute that rides along with `label`:
+All of them run client-side in 0.02–1.70 s combined across the bundled samples (up to 40k triangles on Luxor), write a per-triangle `weight` attribute that rides along with `label` through island cutting, feed `seenLayout` / `nearScaled` / `pagedLayout` and `planner.ts` (`selectViews` + `holeTargets`), and can be inspected as false-colour overlays (`openness`, `curvature`, `light`, `class`, `importance`) in the viewer and `snapshot`:
 
-- **AO / enclosure** (cavity layout weight done: `src/core/surface-weights.ts`, `--cavity`). `faceOpenness` estimates each face's cosine-weighted openness within 1.12 m from 4 rotated short rays per sample point against the BVH (0.01–0.64 s across the samples, 0.018–0.025 MAE against 256 rays; [Fast-SDF-AO](https://github.com/wrong-nebula/Fast-SDF-AO)'s four-tap formula with a normal-ray sign guard errs by 0.07–0.15 on unclosed blockouts because thin bars beside a face read as walls). `cavityScale` shrinks enclosed islands in `seenLayout` and `nearScaled`.
-  - Still open: feed openness to the planner's cell weights; give high-AO faces dirt, wear or darker variants in the prompt and finish passes; measure a baked SDF against `ao.ts` for the exported occlusion map.
-- **Concave curvature / creases** (covered for packing by the cavity weight above). Recesses, slots and tight inside corners sit in shadow and out of reach, so they need fewer texels.
-- **Convex curvature / silhouettes.** Use discrete curvature (such as Cohen-Steiner & Morvan's normal-cycle tensor across interior edges) or normal variation across neighbouring faces. Exposed sharp edges, ridges, columns and silhouettes get close-up cameras, denser texels and detailed normal/height maps. Flat areas get fewer views.
-- **Semantic / material class.** Tag faces as floor, wall, ceiling, organic or hard-surface, using heuristics on normal, height and connectivity (and `semantics.ts` / part names), or a light classifier.
-  - Each class pulls a look preset, roughness range and repair strategy before painting.
-  - The atlas splitter keeps same-class islands together.
-- **Static light importance.** From sky and key-light probes, accumulate how much light each face receives and whether it's shadowed. Well-lit, visible faces get more paint budget. Deep shadow gets lower resolution or simpler materials. Combined with item 6, this gives a "player will see this under normal lighting" score without needing pathfinding.
-
-**Done when:** each weight is computed in under a few seconds on the samples, is viewable as a debug overlay, and is consumed by at least the packer (`nearScaled`) and the planner. Measure the AO prepass against `ao.ts` for time and agreement.
+- **AO / enclosure (`faceOpenness`, `cavityScale`).** Cosine-weighted openness within 1.12 m from 4 rotated short rays per sample point against the BVH (0.01–0.62 s; 0.018–0.025 MAE against 256 rays; [Fast-SDF-AO](https://github.com/wrong-nebula/Fast-SDF-AO)'s four-tap formula with a normal-ray sign guard errs by 0.07–0.15 on unclosed blockouts because thin bars beside a face read as walls). Against `ao.ts`'s 24-ray distance-faded `openness` at the same face points (`compareAoPrepass`), `faceOpenness` runs 5.8–7.2× faster per face (and 30–100× faster than texel-space `bakeAo`) with $r = 0.92\text{–}0.98$ and MAE 0.05–0.12.
+- **Concave curvature / creases.** Covered for packing and planning by the openness cavity weight above: recesses, slots and tight inside corners shrink so open surfaces gain texels.
+- **Convex curvature / silhouettes (`faceCurvature`).** Signed dihedral normal-cycle mean curvature across shared interior edges (1–49 ms; recovers $1/R$ on cylinders regardless of tessellation), boosting exposed ridges, columns and curved props in island packing and look-at target ranking.
+- **Semantic / material class (`faceClass`, `CLASS_PROFILES`, `suggestPresetsFromWeights`).** Tags faces as `floor`, `wall`, `ceiling`, `roof`, `organic` or `hard-surface` from normal, floor height, component size, curvature smoothness and `semantics.ts` / part names; seeds material presets and groups same-class islands together across atlas pages.
+- **Static light importance (`faceLight`).** Accumulates direct sun shadow rays plus sky and room-bounce hemisphere visibility under the scene's `Lighting` (`clay.ts`), down-weighting deep permanent shadow.
+- Still open for follow-up passes: high-AO dirt/wear tinting in prompts and `finish.ts`, and evaluating a WebGPU baked SDF if texel-space `ao.ts` needs replacing.
 
 ## 8. Adaptive, importance-driven camera planning
 

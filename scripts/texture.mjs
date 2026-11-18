@@ -7,6 +7,7 @@
 //     [--ao [--ao-size 1024]]     also bake ambient occlusion into the material's occlusion channel (no model call)
 //     [--unwrap auto|always|off] UVs from scratch (xatlas) when the file's can't hold a painting (default auto)
 //     [--cavity 0.7] with --layout seen|near: enclosed islands (creases, recesses) drawn smaller, down to that scale
+//     [--weights]    geometry prepasses (openness, convex curvature, light, semantic class) weighting layout and camera planning
 //     [--layout seen] lay the texture out again so the faces players can see get the texels (the exported GLB carries the new UVs)
 //     [--full]       a clean-up pass, hard parts textured on their own, and the finishing fill (add --floors 12 for plain ground
 //                    such as concrete: on patterned ground the floor pass still drifts in scale from view to view)
@@ -69,6 +70,7 @@ const { values: a } = parseArgs({
     pages: { type: 'string' },   // 4 or 16: paint over that many textures of --atlas px each (the islands are packed again over them, all at one scale)
     area: { type: 'string' },     // 'x0,y0,z0,x1,y1,z1': where players can be, when the level has more floor than that
     cavity: { type: 'string' },   // with --layout seen or near: draw enclosed islands (creases, slots, recesses) smaller, down to this scale (e.g. 0.7)
+    weights: { type: 'boolean', default: false },   // run all four geometry prepasses (openness, convex curvature, static light, semantic class) for layout and planning
     unwrap: { type: 'string' },   // 'auto' (default): make UVs from scratch (xatlas) when the file's are missing, collapsed, tiling or overlapping; 'always'; 'off': the file's own, as they are
     layout: { type: 'string' },   // 'seen': lay the texture out by what players can see; 'near': join faces into strips and size each island by how near players get; 'file' (default): the level's own UVs
     'view-size': { type: 'string' },   // 2048 (default), or 1024: a quarter of the pixels, quicker, FLUX 3 Klein charges $0.009 instead of $0.014
@@ -138,6 +140,11 @@ if (!a.cavity && a.resume) {
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).layout?.cavity;
   if (saved) a.cavity = String(saved);
 }
+if (!given('weights') && a.resume) {
+  const fs = await import('node:fs');
+  const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8'));
+  if (saved.layout?.weights || saved.weights) a.weights = true;
+}
 if (!a.area && a.resume) {
   const fs = await import('node:fs');
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).area;
@@ -167,8 +174,8 @@ try {
       else log(JSON.stringify(e));
     },
   });
-  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap, cavity]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity: +cavity }),
-    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap, a.cavity ?? '0']);
+  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap, cavity, weights]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity: +cavity, weights }),
+    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap, a.cavity ?? '0', !!a.weights]);
   log(`level: ${JSON.stringify(info)}`);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) {
     log(`projection: ${JSON.stringify(await page.evaluate((o) => window.trompe.projection(o),

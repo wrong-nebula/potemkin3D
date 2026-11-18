@@ -54,6 +54,14 @@ describe('cutIslands', () => {
     expect(Array.from(c.uv).map((v) => +v.toFixed(6))).toEqual(g.uv.map((v) => +v.toFixed(6)));
   });
 
+  it('carries per-corner importance weights onto split pieces alongside labels', () => {
+    const g = join(quad(0, 4, 1, 0, 0, 3), quad(10, 1, 1, 0.6, 0, 5));
+    const weight = g.label.map((l) => (l === 3 ? 0.75 : 1.2));
+    const c = cutIslands(g.position, g.normal, g.uv, g.label, 0.15, weight);
+    expect(c.weight?.length).toBe(c.label.length);
+    for (let i = 0; i < c.label.length; i++) expect(c.weight![i]).toBeCloseTo(c.label[i] === 3 ? 0.75 : 1.2, 5);
+  });
+
   it('lets the pages be filled past what the longest island allowed', () => {
     // one long face and many small ones: uncut, the long one alone sets the scale
     const g = join(quad(0, 9, 1, 0, 0), ...Array.from({ length: 40 }, (_, k) => quad(20 + 3 * k, 1, 1, (k % 9) * 0.11, 0.2 + Math.floor(k / 9) * 0.11)));

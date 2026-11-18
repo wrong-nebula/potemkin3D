@@ -177,6 +177,30 @@ describe('planning by sharpness', () => {
     expect(views[0].kind).toBeUndefined();                      // a planned view like any other
     expect(views[0].fov).toBe(75);
   });
+
+  it('spends camera budget and look-at targets on higher-weight cells first', () => {
+    const list = (from: number, n: number, q: number): CellList => ({
+      cells: Int32Array.from({ length: n }, (_, i) => from + i),
+      q: new Float32Array(n).fill(q),
+    });
+    const o = { ...DEFAULT_PLAN, grid: 16, maxViews: 1 };
+    const weights = new Float32Array(256).fill(0.5);
+    weights.fill(1.4, 40, 75);   // 35 high-importance convex/lit cells beat 40 enclosed crevice cells
+    const lists = [list(0, 40, 0.5), list(40, 35, 0.5)];
+    expect(selectViews(lists, o).order).toEqual([0]);
+    expect(selectViews(lists, o, [], undefined, undefined, undefined, weights).order).toEqual([1]);
+
+    const sharp = { density: new Float32Array(256).fill(100), ppm: [100, 100], paint: [1, 1], ppmExisting: 100 };
+    expect(selectViews(lists, o, [], undefined, undefined, sharp, weights).order).toEqual([1]);
+
+    // holeTargets orders patches by weighted score rather than raw cell count
+    const pos = new Float32Array(8 * 4), nrm = new Float32Array(8 * 4), q = new Float32Array(8);
+    for (let i = 0; i < 5; i++) { pos.set([0, 1, 0, 0], 4 * i); nrm.set([1, 0, 0, 1], 4 * i); }
+    for (let i = 5; i < 8; i++) { pos.set([10, 1, 0, 0], 4 * i); nrm.set([1, 0, 0, 1], 4 * i); }
+    const patchW = Float32Array.from([0.4, 0.4, 0.4, 0.4, 0.4, 1.3, 1.3, 1.3]);
+    expect(holeTargets(pos, nrm, q)[0].center.x).toBe(0);
+    expect(holeTargets(pos, nrm, q, 3, 24, patchW)[0].center.x).toBe(10);
+  });
 });
 
 describe('floor cameras', () => {

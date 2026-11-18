@@ -12,6 +12,7 @@ import { makeCamera, viewDirection } from './views';
 import { WalkControls, Walker } from './walk';
 import { loadFloorDetail, installFloorDetail, type FloorDetail, type FloorDetailSpec } from './floor-detail';
 import { MATERIAL_PRESETS } from './material-presets';
+import { weightOverlayColors, type SurfaceWeights, type WeightOverlayKind } from './surface-weights';
 
 export const PINK = new THREE.Color('#F53CD1');
 
@@ -63,6 +64,33 @@ void main() {
 }`;
 
 export type DisplayMode = 'clay' | 'textured' | 'lit';
+export type WeightOverlay = 'off' | WeightOverlayKind;
+
+const WEIGHT_VERT = /* glsl */ `
+in vec3 color;
+out vec3 vColor;
+out vec3 vNormal;
+out vec3 vWorld;
+void main() {
+  vColor = color;
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vWorld = w.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+
+const WEIGHT_FRAG = /* glsl */ `
+precision highp float;
+in vec3 vColor;
+in vec3 vNormal;
+in vec3 vWorld;
+layout(location = 0) out vec4 outColor;
+void main() {
+  vec3 n = normalize(vNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+  vec3 v = normalize(cameraPosition - vWorld);
+  float shade = 0.68 + 0.22 * abs(dot(n, v)) + 0.10 * max(0.0, n.y);
+  outColor = vec4(vColor * shade, 1.0);
+}`;
 
 /**
  * Lit display: the painted texture as albedo under the viewer's sun (with real shadows) and sky light, with the same
@@ -121,6 +149,11 @@ export class Viewer {
   points?: THREE.Points;
   frusta?: THREE.LineSegments;
   mode: DisplayMode = 'clay';
+  /** False-colour debug view of the geometry prepasses (core/surface-weights.ts); 'off' for normal display. */
+  weightOverlay: WeightOverlay = 'off';
+  private weightMesh?: THREE.Mesh;
+  private weightGeo?: THREE.BufferGeometry;
+  private weightMat?: THREE.ShaderMaterial;
   /** Show the AI-matched sky behind textured views (otherwise the flat clay sky colour). */
   aiSky = true;
   dirty = true;
@@ -207,12 +240,42 @@ export class Viewer {
 
   setMode(mode: DisplayMode) {
     this.mode = mode;
-    this.texMesh.visible = mode !== 'clay';
+    const normal = this.weightOverlay === 'off';
+    this.clayMesh.visible = normal;
+    this.texMesh.visible = normal && mode !== 'clay';
     this.texMesh.material = mode === 'lit' ? this.litMat : this.texMaterial;
     this.texMesh.receiveShadow = mode === 'lit';
-    this.sky.mesh.visible = (mode === 'textured' && this.aiSky) || mode === 'lit';
+    this.sky.mesh.visible = normal && ((mode === 'textured' && this.aiSky) || mode === 'lit');
     (this.sky.mesh.material as THREE.ShaderMaterial).uniforms.has.value = mode === 'lit' ? 0 : this.sky.built ? 1 : 0;
     this.syncLighting();
+    this.dirty = true;
+  }
+
+  /** Show a per-face geometry weight or semantic class map as false colour on the mesh, or 'off' to restore `mode`. */
+  setWeightOverlay(overlay: WeightOverlay, weights?: SurfaceWeights) {
+    this.weightOverlay = overlay;
+    if (overlay === 'off' || !weights) {
+      this.weightOverlay = 'off';
+      if (this.weightMesh) this.weightMesh.visible = false;
+      this.setMode(this.mode);
+      return;
+    }
+    const src = this.engine.level.geometry;
+    if (!this.weightMesh) {
+      this.weightGeo = new THREE.BufferGeometry();
+      this.weightMat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3, vertexShader: WEIGHT_VERT, fragmentShader: WEIGHT_FRAG, side: THREE.DoubleSide,
+      });
+      this.weightMesh = new THREE.Mesh(this.weightGeo, this.weightMat);
+      this.scene.add(this.weightMesh);
+    }
+    this.weightGeo!.setAttribute('position', src.getAttribute('position'));
+    this.weightGeo!.setAttribute('normal', src.getAttribute('normal'));
+    this.weightGeo!.setAttribute('color', new THREE.BufferAttribute(weightOverlayColors(overlay, weights), 3));
+    this.weightMesh.visible = true;
+    this.clayMesh.visible = false;
+    this.texMesh.visible = false;
+    this.sky.mesh.visible = false;
     this.dirty = true;
   }
 
@@ -424,6 +487,8 @@ export class Viewer {
     this.sun.shadow.dispose();
     this.texMaterial.dispose();
     this.litMat.dispose();
+    this.weightGeo?.dispose();
+    this.weightMat?.dispose();
     this.sky.dispose();
     this.controls.dispose();
   }
@@ -448,11 +513,12 @@ export class Viewer {
       this.floorDetailState.enabled && this.texMaterial.uniforms.useBefore.value < .5 ? 1 : 0;
     const r = this.engine.gpu.renderer;
     r.setRenderTarget(null);
-    r.toneMapping = THREE.NeutralToneMapping;
-    r.toneMappingExposure = this.lighting.exposure;
+    const showingWeights = this.weightOverlay !== 'off';
+    r.toneMapping = showingWeights ? THREE.NoToneMapping : THREE.NeutralToneMapping;
+    r.toneMappingExposure = showingWeights ? 1 : this.lighting.exposure;
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.autoClear = true;
-    r.setClearColor(new THREE.Color(...this.lighting.sky), 1);
+    r.setClearColor(showingWeights ? new THREE.Color(0x161822) : new THREE.Color(...this.lighting.sky), 1);
     r.render(this.scene, camera);
     r.toneMapping = THREE.NoToneMapping;
     this.dirty = false;

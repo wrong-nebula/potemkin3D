@@ -264,9 +264,9 @@ export function seenLayout(position: ArrayLike<number>, uv: ArrayLike<number>, s
 /** Multiply each island's scale by the lowest weight of its triangles, on the islands where `on` is 1. */
 function applyWeight(scale: Float32Array, of: Int32Array, weight: ArrayLike<number> | undefined, on: ArrayLike<number>) {
   if (!weight) return;
-  const w = new Float32Array(scale.length).fill(1);
+  const w = new Float32Array(scale.length).fill(Infinity);
   for (let t = 0; t < of.length; t++) w[of[t]] = Math.min(w[of[t]], weight[t]);
-  for (let k = 0; k < scale.length; k++) if (on[k]) scale[k] *= w[k];
+  for (let k = 0; k < scale.length; k++) if (on[k] && Number.isFinite(w[k])) scale[k] *= w[k];
 }
 
 /**
@@ -505,6 +505,8 @@ export interface CutIslands {
   normal: Float32Array;
   uv: Float32Array;
   label: Float32Array;
+  /** Optional per-corner importance weight carried alongside `label`. */
+  weight?: Float32Array;
   /** A class per triangle: the piece it belongs to. Pieces of one face meet in the texture, but are islands of their own. */
   cls: Int32Array;
   /** Islands that were cut, and the pieces they are now. */
@@ -525,7 +527,7 @@ export interface CutIslands {
  * @param limit the longest an island may be along either axis, in the layout's units
  */
 export function cutIslands(position: ArrayLike<number>, normal: ArrayLike<number>, uv: ArrayLike<number>, label: ArrayLike<number>,
-  limit: number): CutIslands {
+  limit: number, weight?: ArrayLike<number>): CutIslands {
   const tris = Math.floor(position.length / 9);
   const { of, count } = uvIslands(position, uv);
   const minU = new Float64Array(count).fill(Infinity), minV = new Float64Array(count).fill(Infinity);
@@ -547,13 +549,13 @@ export function cutIslands(position: ArrayLike<number>, normal: ArrayLike<number
     classes += nx[k] * ny[k];
     if (nx[k] * ny[k] > 1) { cut++; pieces += nx[k] * ny[k]; }
   }
-  const P: number[] = [], N: number[] = [], U: number[] = [], L: number[] = [], C: number[] = [];
+  const P: number[] = [], N: number[] = [], U: number[] = [], L: number[] = [], W: number[] = [], C: number[] = [];
   // a corner: u, v, then its place and its normal
   type Corner = number[];
   const corner = (t: number, v: number): Corner => [uv[6 * t + 2 * v], uv[6 * t + 2 * v + 1],
     position[9 * t + 3 * v], position[9 * t + 3 * v + 1], position[9 * t + 3 * v + 2], normal[9 * t + 3 * v], normal[9 * t + 3 * v + 1], normal[9 * t + 3 * v + 2]];
-  const push = (a: Corner, b: Corner, c: Corner, l: number, cl: number) => {
-    for (const x of [a, b, c]) { U.push(x[0], x[1]); P.push(x[2], x[3], x[4]); N.push(x[5], x[6], x[7]); L.push(l); }
+  const push = (a: Corner, b: Corner, c: Corner, l: number, w: number, cl: number) => {
+    for (const x of [a, b, c]) { U.push(x[0], x[1]); P.push(x[2], x[3], x[4]); N.push(x[5], x[6], x[7]); L.push(l); if (weight) W.push(w); }
     C.push(cl);
   };
   // what of a polygon lies on one side of a line of the texture (axis 0: u, 1: v)
@@ -573,9 +575,9 @@ export function cutIslands(position: ArrayLike<number>, normal: ArrayLike<number
     return out;
   };
   for (let t = 0; t < tris; t++) {
-    const k = of[t], l = label[3 * t];
+    const k = of[t], l = label[3 * t], w = weight ? weight[3 * t] : 1;
     const tri = [corner(t, 0), corner(t, 1), corner(t, 2)];
-    if (nx[k] * ny[k] === 1) { push(tri[0], tri[1], tri[2], l, base[k]); continue; }
+    if (nx[k] * ny[k] === 1) { push(tri[0], tri[1], tri[2], l, w, base[k]); continue; }
     const cw = (maxU[k] - minU[k]) / nx[k], ch = (maxV[k] - minV[k]) / ny[k];
     const cell = (x: number, lo: number, size: number, n: number) => Math.min(n - 1, Math.max(0, Math.floor((x - lo) / size + 1e-9)));
     const i0 = cell(Math.min(tri[0][0], tri[1][0], tri[2][0]), minU[k], cw, nx[k]), i1 = cell(Math.max(tri[0][0], tri[1][0], tri[2][0]) - 1e-12, minU[k], cw, nx[k]);
@@ -590,12 +592,13 @@ export function cutIslands(position: ArrayLike<number>, normal: ArrayLike<number
         for (let q = 1; q + 1 < poly.length; q++) {
           const a = poly[0], b = poly[q], c = poly[q + 1];
           if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) < 1e-14) continue;   // a sliver with no area
-          push(a, b, c, l, base[k] + j * nx[k] + i);
+          push(a, b, c, l, w, base[k] + j * nx[k] + i);
         }
       }
     }
   }
-  return { position: Float32Array.from(P), normal: Float32Array.from(N), uv: Float32Array.from(U), label: Float32Array.from(L), cls: Int32Array.from(C), cut, pieces, limit };
+  return { position: Float32Array.from(P), normal: Float32Array.from(N), uv: Float32Array.from(U), label: Float32Array.from(L),
+    ...(weight ? { weight: Float32Array.from(W) } : {}), cls: Int32Array.from(C), cut, pieces, limit };
 }
 
 /**

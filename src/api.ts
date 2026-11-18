@@ -22,6 +22,7 @@ import type { FloorDetailSpec } from './core/floor-detail';
 import { MATERIAL_PRESETS, type MaterialAssignments } from './core/material-presets';
 import type { AlignedMapSource } from './core/aligned-maps';
 import { validateViews } from './core/validation-engine';
+import type { WeightOverlay } from './core/viewer';
 
 /**
  * window.trompe: the same operations as the UI, for headless runs (scripts/texture.mjs) and the demo capture.
@@ -98,9 +99,15 @@ export function makeApi(session: Session) {
       return session.viewer.floorDetailState;
     },
     demo: new Demo(session),
-    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number } = {}) {
+    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number; weights?: boolean } = {}) {
       const name = opts.name ?? url.split('/').pop()!.replace(/\.\w+$/, '');
-      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0);
+      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0, !!opts.weights);
+    },
+    /** Compute the four geometry prepasses (openness, convex curvature, static light, semantic class) and optionally display a false-colour debug overlay. */
+    weights(overlay?: WeightOverlay) {
+      if (overlay) return session.setWeightOverlay(overlay);
+      const sw = session.ensureWeights();
+      return { triangles: sw.importance.length, seconds: sw.seconds, classes: sw.classes, mean: sw.mean };
     },
     /** How views are projected into the texture from here on (and when a run is loaded): see EngineOptions. */
     projection(o: { minCos?: number; edgeGuard?: number; frameMargin?: number }) {
@@ -209,18 +216,22 @@ export function makeApi(session: Session) {
     },
     /** Render the viewer from a camera and return a JPEG data URL (debugging and stills). */
     snapshot(o: { position: [number, number, number]; target: [number, number, number]; fov?: number; width?: number;
-      height?: number; mode?: 'clay' | 'textured' | 'lit'; overlay?: boolean }) {
+      height?: number; mode?: 'clay' | 'textured' | 'lit'; overlay?: boolean; weights?: WeightOverlay }) {
       const v = session.viewer!;
       const w = o.width ?? 1280, h = o.height ?? 720;
+      const prevWeights = v.weightOverlay;
       v.resize(w, h);
       v.camera.fov = o.fov ?? 60;
       v.camera.position.set(...o.position);
       v.camera.lookAt(...o.target);
       v.camera.updateProjectionMatrix();
       v.setMode(o.mode ?? 'clay');
+      if (o.weights !== undefined) session.setWeightOverlay(o.weights);
       v.overlay.visible = o.overlay ?? true;
       v.render(v.camera);
-      return session.canvas.toDataURL('image/jpeg', 0.92);
+      const dataUrl = session.canvas.toDataURL('image/jpeg', 0.92);
+      if (o.weights !== undefined && prevWeights !== o.weights) session.setWeightOverlay(prevWeights);
+      return dataUrl;
     },
     bounds() {
       const b = session.level!.bounds;

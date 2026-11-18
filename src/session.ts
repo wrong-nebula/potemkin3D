@@ -29,12 +29,12 @@ import { editMask, masksFromState } from './core/composite';
 import { makeCamera, lookAt } from './core/views';
 import { resizeRGBA } from './core/image';
 import { loadLevel, setTriangles, type Level } from './core/scene';
-import { cavityScale, faceOpenness } from './core/surface-weights';
+import { cavityScale, faceOpenness, suggestPresetsFromWeights, surfaceWeights, weightScale, writeWeightAttribute, type SurfaceWeights } from './core/surface-weights';
 import { unwrap as unwrapUVs, uvHealth, type UvHealth } from './core/unwrap';
 import { browserXatlas } from './core/xatlas-browser';
 import { MODELS, PART_MODEL } from './providers/models';
 import type { ViewSpec } from './core/views';
-import { Viewer } from './core/viewer';
+import { Viewer, type WeightOverlay } from './core/viewer';
 
 /**
  * How far ahead of the room's views a prop's own views and a ground note are stored. They are there to replace what
@@ -73,9 +73,12 @@ export class Session {
    *   the file's, and refuse a file without any. The layout above then runs on what this gives.
    * @param cavity with 'seen' or 'near': draw islands that sit enclosed (in a crease, a slot, a recess: openness from
    *   core/surface-weights.ts) smaller, down to this scale along each side; 0 (default): off
+   * @param weights run all four geometry prepasses (openness, convex curvature, static light and semantic class,
+   *   core/surface-weights.ts), store a per-triangle `weight` attribute alongside `label` for camera planning, and
+   *   (with 'seen' or 'near') weight island packing and keep same-class islands together
    */
   async load(source: string | ArrayBuffer, name: string, lighting: Lighting = OUTDOOR, atlasSize = 4096, viewSize = 2048,
-    layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1, unwrap: 'auto' | 'always' | 'off' = 'auto', cavity = 0) {
+    layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1, unwrap: 'auto' | 'always' | 'off' = 'auto', cavity = 0, weights = false) {
     if (cavity && !(cavity > 0 && cavity < 1)) throw new Error(`cavity is the smallest scale for an enclosed island, between 0 and 1, not ${cavity}`);
     if (cavity && layout === 'file') throw new Error("cavity needs a layout that is packed again: 'seen' or 'near'");
     this.viewer?.dispose();
@@ -108,18 +111,27 @@ export class Session {
       for (let i = 6; i + 2 < area.length; i += 3) spots.push(new THREE.Vector3(area[i], area[i + 1], area[i + 2]));
       if (spots.length) this.level.spots = spots;
     }
+    const minScale = cavity || 0.7;
+    const sw = weights ? surfaceWeights(this.level, lighting, { minScale }) : undefined;
+    if (sw) {
+      this.level.surfaceWeights = sw;
+      this.level.weights = { seconds: sw.seconds, classes: sw.classes, mean: sw.mean };
+      writeWeightAttribute(this.level.geometry, sw.importance);
+    }
     if (layout === 'seen') {
       const t0 = performance.now();
       const level = this.level, g = level.geometry;
       // where players' eyes can be, sampled more densely than the cameras are: a player walks everywhere
       const eyes = samplePlayerPoints(level, { ...DEFAULT_PLAN, spacing: 2 });
       const position = g.getAttribute('position').array, uv = g.getAttribute('uv').array;
-      const cav = cavity ? this.cavityWeights(uv, cavity) : undefined;
+      const cav = !sw && cavity ? this.cavityWeights(uv, cavity) : undefined;
+      if (cav) writeWeightAttribute(g, cav.weight);
+      const packW = sw ? weightScale(position, uv, sw, { minScale }) : cav?.weight;
       const l = seenLayout(position, uv, eyes.length ? seenTriangles(position, level.bvh, eyes) : new Uint8Array(position.length / 9).fill(1),
-        cav ? { weight: cav.weight, minGain: 0 } : {});
+        packW ? { weight: packW, minGain: 0 } : {});
       if (l.applied) g.setAttribute('uv', new THREE.Float32BufferAttribute(l.uv, 2));
       level.layout = { applied: l.applied, gain: l.gain, seenSurface: l.seenSurface, seenTexture: l.seenTexture, islands: l.islands,
-        hash: layoutHash(l.uv), seconds: (performance.now() - t0) / 1000, ...(cav ? { cavity: cav.info } : {}) };
+        hash: layoutHash(l.uv), seconds: (performance.now() - t0) / 1000, ...(cav ? { cavity: cav.info } : {}), ...(sw ? { weights: level.weights } : {}) };
     }
     const grid = Math.round(Math.sqrt(pages));
     if (grid * grid !== pages || grid > 4) throw new Error(`a level is painted over 1, 4 or 16 textures, not ${pages}`);
@@ -134,16 +146,19 @@ export class Session {
       const dist = eyes.length ? seenDistance(position, level.bvh, eyes) : new Float32Array(part.length).fill(1);
       const share = seenShare(position, uv, dist);
       const strips = stripLayout(position, uv, part);
-      const cav = cavity ? this.cavityWeights(strips.uv, cavity) : undefined;
-      const sized = nearScaled(position, strips.uv, dist, cav ? { weight: cav.weight } : {});
-      const l = this.packOverPages(sized.uv, grid);
+      const cav = !sw && cavity ? this.cavityWeights(strips.uv, cavity) : undefined;
+      if (cav) writeWeightAttribute(g, cav.weight);
+      const packW = sw ? weightScale(position, strips.uv, sw, { minScale }) : cav?.weight;
+      const sized = nearScaled(position, strips.uv, dist, packW ? { weight: packW } : {});
+      const l = this.packOverPages(sized.uv, grid, sw?.faceClass);
       const hash = layoutHash(l.uv), seconds = (performance.now() - t0) / 1000;
       level.layout = { kind: 'near', applied: true, gain: l.gain, seenSurface: share.surface, seenTexture: share.texture, islands: l.islands, hash, seconds,
-        strips: strips.strips, joined: strips.joined, before: strips.before, full: sized.full, cut: l.cut, pieces: l.pieces, ...(cav ? { cavity: cav.info } : {}) };
+        strips: strips.strips, joined: strips.joined, before: strips.before, full: sized.full, cut: l.cut, pieces: l.pieces,
+        ...(cav ? { cavity: cav.info } : {}), ...(sw ? { weights: level.weights } : {}) };
       if (grid > 1) level.pages = { grid, gain: l.gain, islands: l.islands, fill: l.fill, cut: l.cut, pieces: l.pieces, hash, seconds };
     } else if (pages > 1) {
       const t0 = performance.now();
-      const l = this.packOverPages(this.level.geometry.getAttribute('uv').array, grid);
+      const l = this.packOverPages(this.level.geometry.getAttribute('uv').array, grid, sw?.faceClass);
       this.level.pages = { grid, gain: l.gain, islands: l.islands, fill: l.fill, cut: l.cut, pieces: l.pieces, hash: layoutHash(l.uv), seconds: (performance.now() - t0) / 1000 };
     }
     this.engine = new Engine(this.gpu, this.level, { lighting, atlasSize, atlasPages: pages, viewSize });
@@ -152,8 +167,39 @@ export class Session {
     this.record = undefined;
     return { triangles: this.level.triangles, area: Math.round(this.level.surfaceArea),
       ...(uvHealthInfo ? { uvHealth: uvHealthInfo } : {}), ...(this.level.unwrap ? { unwrap: this.level.unwrap } : {}),
+      ...(this.level.weights ? { weights: this.level.weights } : {}),
       ...(this.level.layout ? { layout: this.level.layout } : {}),
       ...(this.level.pages ? { pages: { ...this.level.pages, size: atlasSize } } : {}) };
+  }
+
+  /** Compute (once per triangle set) and return the four geometry prepasses for the loaded level. */
+  ensureWeights(): SurfaceWeights {
+    const level = this.level;
+    if (!level) throw new Error('load a level first');
+    if (!level.surfaceWeights || level.surfaceWeights.importance.length !== level.triangles) {
+      level.surfaceWeights = surfaceWeights(level, this.engine?.clay.lighting ?? OUTDOOR, { minScale: level.layout?.cavity?.minScale ?? 0.65 });
+      if (!level.geometry.getAttribute('weight')) writeWeightAttribute(level.geometry, level.surfaceWeights.importance);
+    }
+    return level.surfaceWeights;
+  }
+
+  /** Show a per-face geometry weight or semantic class map as false colour in the viewer, or 'off' to restore display. */
+  setWeightOverlay(overlay: WeightOverlay) {
+    if (!this.viewer || !this.level) throw new Error('load a level first');
+    if (overlay === 'off') {
+      this.viewer.setWeightOverlay('off');
+      return { overlay: 'off' as const };
+    }
+    const sw = this.ensureWeights();
+    this.viewer.setWeightOverlay(overlay, sw);
+    return { overlay, seconds: sw.seconds, classes: sw.classes, mean: sw.mean };
+  }
+
+  /** Suggest material presets using part names plus semantic face classes. */
+  suggestMaterialPresets(): MaterialAssignments {
+    if (!this.level) throw new Error('load a level first');
+    const sw = this.ensureWeights();
+    return suggestPresetsFromWeights(this.level.labels, this.level.geometry.getAttribute('label').array, sw.faceClass);
   }
 
   /** Per-triangle scales that shrink enclosed islands of `uv` down to `minScale` (core/surface-weights.ts). */
@@ -286,14 +332,25 @@ export class Session {
    * are cut in pieces first (core/layout.ts cutIslands): that gives the level some more triangles for the same surface.
    * @param uv the layout to pack: the level's own, or one made from it (2 per corner, not packed)
    */
-  private packOverPages(uv: ArrayLike<number>, grid: number) {
+  private packOverPages(uv: ArrayLike<number>, grid: number, faceCls?: ArrayLike<number>) {
     const level = this.level!, g = level.geometry;
     const position = g.getAttribute('position').array, normal = g.getAttribute('normal').array, label = g.getAttribute('label').array;
-    const cut = cutIslands(position, normal, uv, label, islandLimit(position, uv, grid));
+    const weight = g.getAttribute('weight')?.array;
+    let inLabel: ArrayLike<number> = label;
+    if (faceCls) {
+      const enc = new Float32Array(label.length);
+      for (let t = 0; t < faceCls.length; t++) enc[3 * t] = enc[3 * t + 1] = enc[3 * t + 2] = Math.round(label[3 * t]) * 8 + faceCls[t];
+      inLabel = enc;
+    }
+    const cut = cutIslands(position, normal, uv, inLabel, islandLimit(position, uv, grid), weight);
+    const group = new Int32Array(cut.position.length / 9);
+    for (let t = 0; t < group.length; t++) {
+      const raw = Math.round(cut.label[3 * t]);
+      group[t] = raw;
+      if (faceCls) cut.label[3 * t] = cut.label[3 * t + 1] = cut.label[3 * t + 2] = Math.floor(raw / 8);
+    }
     if (cut.cut) setTriangles(level, cut);
-    const part = new Int32Array(cut.position.length / 9);
-    for (let t = 0; t < part.length; t++) part[t] = cut.label[3 * t];
-    const l = pagedLayout(cut.position, cut.uv, grid, part, undefined, cut.cls);
+    const l = pagedLayout(cut.position, cut.uv, grid, group, undefined, cut.cls);
     level.geometry.setAttribute('uv', new THREE.Float32BufferAttribute(l.uv, 2));
     return { ...l, cut: cut.cut, pieces: cut.pieces };
   }
@@ -1204,8 +1261,10 @@ export class Session {
       materialPresets: { ...this.engine!.materialPresets },
       ...(this.level?.playArea ? { area: [...this.level.playArea.min.toArray(), ...this.level.playArea.max.toArray(), ...(this.level.spots ?? []).flatMap((p) => p.toArray())] } : {}),
       ...(this.level?.unwrap ? { unwrap: { hash: this.level.unwrap.hash, reason: this.level.unwrap.reason } } : {}),
+      ...(this.level?.weights && !this.level?.layout?.applied ? { weights: true } : {}),
       ...(this.level?.layout?.applied ? { layout: { kind: this.level.layout.kind ?? 'seen', hash: this.level.layout.hash, gain: this.level.layout.gain,
-        ...(this.level.layout.cavity ? { cavity: this.level.layout.cavity.minScale } : {}) } } : {}),
+        ...(this.level.layout.cavity ? { cavity: this.level.layout.cavity.minScale } : {}),
+        ...(this.level.layout.weights ? { weights: true } : {}) } } : {}),
       ...(this.level?.pages ? { pages: { count: this.engine!.atlas.pageCount, size: this.engine!.atlas.pageSize, hash: this.level.pages.hash, gain: this.level.pages.gain } } : {}),
       ...(this.engine!.ao ? { ao: { size: this.engine!.ao.size, rays: this.engine!.ao.rays, radius: this.engine!.ao.radius } } : {}),
       plan: { points: r.plan.points.map((p) => p.toArray()), views: r.plan.views, waves: r.plan.waves, predicted: r.plan.predicted },

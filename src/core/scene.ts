@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH } from 'three-mesh-bvh';
 import { splitParts, type Part } from './parts';
+import type { SurfaceWeights, SurfaceWeightsSummary } from './surface-weights';
 
 /** A level flattened into one world-space mesh with a single UV set (TEXCOORD_0). */
 export interface Level {
@@ -41,6 +42,10 @@ export interface Level {
   missingUV?: string[];
   /** Set when the texture coordinates were made from scratch (core/unwrap.ts), before any layout above. */
   unwrap?: LevelUnwrap;
+  /** Cached geometry prepass weights for the current triangles (core/surface-weights.ts). */
+  surfaceWeights?: SurfaceWeights;
+  /** Summary of geometry prepass weights when enabled on load (`weights: true`). */
+  weights?: SurfaceWeightsSummary;
 }
 
 export interface LevelUnwrap {
@@ -89,6 +94,8 @@ export interface LevelLayout {
   /** Enclosed islands drawn smaller (Session.load `cavity`): the smallest scale, the share of the surface shrunk, and
    * the share of their texels those islands keep before packing. */
   cavity?: { minScale: number; shrunkSurface: number; kept: number; seconds: number };
+  /** Full geometry prepasses (openness, convex curvature, static light, semantic class) weighted the layout and planner. */
+  weights?: SurfaceWeightsSummary;
   /** False when the weighted layout gained too little and the file's own was kept. */
   applied: boolean;
   /** How much denser the faces players see are than in the file's layout, along each axis. */
@@ -106,17 +113,20 @@ export interface LevelLayout {
  * Give a level other triangles for the same surface (core/layout.ts cutIslands cuts faces in pieces): its geometry,
  * the tree its rays are cast through, and its counts.
  */
-export function setTriangles(level: Level, t: { position: Float32Array; normal: Float32Array; uv: Float32Array; label: Float32Array }) {
+export function setTriangles(level: Level, t: { position: Float32Array; normal: Float32Array; uv: Float32Array; label: Float32Array; weight?: Float32Array }) {
   const g = level.geometry;
   g.setIndex(null);   // the tree's own, over the old triangles
   g.setAttribute('position', new THREE.BufferAttribute(t.position, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(t.normal, 3));
   g.setAttribute('uv', new THREE.BufferAttribute(t.uv, 2));
   g.setAttribute('label', new THREE.BufferAttribute(t.label, 1));
+  if (t.weight) g.setAttribute('weight', new THREE.BufferAttribute(t.weight, 1));
+  else g.deleteAttribute('weight');
   g.computeBoundingBox();
   g.computeBoundingSphere();
   level.bvh = new MeshBVH(g);
   level.triangles = t.position.length / 9;
+  level.surfaceWeights = undefined;
   if (level.shapes) {
     for (const s of level.shapes) s.triangles = 0;
     for (let i = 0; i < t.label.length; i += 3) { const s = level.shapes[t.label[i]]; if (s) s.triangles++; }
