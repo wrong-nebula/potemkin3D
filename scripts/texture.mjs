@@ -5,6 +5,7 @@
 //     [--lighting overcast|outdoor|indoor|indoor-soft] [--style "..."] [--first flux3-klein|h3] [--fill flux3-klein|h3|fibo2] [--view-size 2048|4096] [--aerial 8] [--roofs 24] [--floors 16] [--holes 12] [--plan-only]
 //     [--pbr [--pbr-size 4096]]   also make normal and roughness maps for the finished texture
 //     [--ao [--ao-size 1024]]     also bake ambient occlusion into the material's occlusion channel (no model call)
+//     [--unwrap auto|always|off] UVs from scratch (xatlas) when the file's can't hold a painting (default auto)
 //     [--layout seen] lay the texture out again so the faces players can see get the texels (the exported GLB carries the new UVs)
 //     [--full]       a clean-up pass, hard parts textured on their own, and the finishing fill (add --floors 12 for plain ground
 //                    such as concrete: on patterned ground the floor pass still drifts in scale from view to view)
@@ -66,6 +67,7 @@ const { values: a } = parseArgs({
     atlas: { type: 'string', default: '4096' },
     pages: { type: 'string' },   // 4 or 16: paint over that many textures of --atlas px each (the islands are packed again over them, all at one scale)
     area: { type: 'string' },     // 'x0,y0,z0,x1,y1,z1': where players can be, when the level has more floor than that
+    unwrap: { type: 'string' },   // 'auto' (default): make UVs from scratch (xatlas) when the file's are missing, collapsed, tiling or overlapping; 'always'; 'off': the file's own, as they are
     layout: { type: 'string' },   // 'seen': lay the texture out by what players can see; 'near': join faces into strips and size each island by how near players get; 'file' (default): the level's own UVs
     'view-size': { type: 'string' },   // 2048 (default), or 1024: a quarter of the pixels, quicker, FLUX 3 Klein charges $0.009 instead of $0.014
     'plan-only': { type: 'boolean', default: false },
@@ -123,6 +125,12 @@ if (!a.layout && a.resume) {
   a.layout = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).layout?.kind;
 }
 a.layout ??= 'file';
+if (!a.unwrap && a.resume) {
+  // on the texture coordinates it was painted on: a run unwrapped when it didn't need to be was asked to
+  const fs = await import('node:fs');
+  if (JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).unwrap?.reason === 'asked') a.unwrap = 'always';
+}
+a.unwrap ??= 'auto';
 if (!a.area && a.resume) {
   const fs = await import('node:fs');
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).area;
@@ -152,8 +160,8 @@ try {
       else log(JSON.stringify(e));
     },
   });
-  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages }),
-    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1)]);
+  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap }),
+    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap]);
   log(`level: ${JSON.stringify(info)}`);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) {
     log(`projection: ${JSON.stringify(await page.evaluate((o) => window.trompe.projection(o),

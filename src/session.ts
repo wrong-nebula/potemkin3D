@@ -29,6 +29,8 @@ import { editMask, masksFromState } from './core/composite';
 import { makeCamera, lookAt } from './core/views';
 import { resizeRGBA } from './core/image';
 import { loadLevel, setTriangles, type Level } from './core/scene';
+import { unwrap as unwrapUVs, uvHealth, type UvHealth } from './core/unwrap';
+import { browserXatlas } from './core/xatlas-browser';
 import { MODELS, PART_MODEL } from './providers/models';
 import type { ViewSpec } from './core/views';
 import { Viewer } from './core/viewer';
@@ -65,9 +67,12 @@ export class Session {
    *   'file': the level's own UVs.
    * @param pages how many textures the level is painted over: 1, 4 or 16, each `atlasSize` px. With more than one the
    *   islands of the layout are packed again, each wholly on one page and all at one scale (core/layout.ts pagedLayout).
+   * @param unwrap 'auto': make texture coordinates from scratch (core/unwrap.ts, xatlas) when the file's are missing
+   *   or can't hold a painting (collapsed, tiling or overlapping); 'always': whatever the file's are like; 'off': keep
+   *   the file's, and refuse a file without any. The layout above then runs on what this gives.
    */
   async load(source: string | ArrayBuffer, name: string, lighting: Lighting = OUTDOOR, atlasSize = 4096, viewSize = 2048,
-    layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1) {
+    layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1, unwrap: 'auto' | 'always' | 'off' = 'auto') {
     this.viewer?.dispose();
     this.engine?.atlas.dispose();
     this.projectionSet = false;
@@ -75,7 +80,20 @@ export class Session {
     this.partFiles.clear();
     this.groundTiles = undefined;
     this.groundNoteComps.clear();
-    this.level = await loadLevel(source, name);
+    this.level = await loadLevel(source, name, { allowMissingUV: unwrap !== 'off' });
+    let uvHealthInfo: UvHealth | undefined;
+    if (unwrap !== 'off') {
+      const g = this.level.geometry;
+      const position = g.getAttribute('position').array;
+      uvHealthInfo = uvHealth(position, g.getAttribute('uv').array);   // all at 0 when no mesh had any: 'missing'
+      if (this.level.missingUV?.length) uvHealthInfo.problem ??= `no texture coordinates on ${this.level.missingUV.join(', ')}`;
+      const reason = unwrap === 'always' ? 'asked' : uvHealthInfo.problem;
+      if (reason) {
+        const u = await unwrapUVs(position, g.getAttribute('label').array, browserXatlas());
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(u.uv, 2));
+        this.level.unwrap = { reason, meshes: u.meshes, charts: u.charts, fill: u.fill, hash: layoutHash(u.uv), seconds: u.seconds };
+      }
+    }
     // `area`: min x, y, z then max x, y, z of where players can be (see Level.playArea)
     // any triples after those six are eye positions given by hand (see Level.spots)
     if (area && area.length >= 6) {
@@ -123,7 +141,9 @@ export class Session {
     this.viewer = new Viewer(this.engine, this.canvas);
     this.plan = undefined;
     this.record = undefined;
-    return { triangles: this.level.triangles, area: Math.round(this.level.surfaceArea), ...(this.level.layout ? { layout: this.level.layout } : {}),
+    return { triangles: this.level.triangles, area: Math.round(this.level.surfaceArea),
+      ...(uvHealthInfo ? { uvHealth: uvHealthInfo } : {}), ...(this.level.unwrap ? { unwrap: this.level.unwrap } : {}),
+      ...(this.level.layout ? { layout: this.level.layout } : {}),
       ...(this.level.pages ? { pages: { ...this.level.pages, size: atlasSize } } : {}) };
   }
 
@@ -1157,6 +1177,7 @@ export class Session {
       ...(this.viewer?.floorDetailSettings ? { floorDetail: this.viewer.floorDetailSettings } : {}),
       materialPresets: { ...this.engine!.materialPresets },
       ...(this.level?.playArea ? { area: [...this.level.playArea.min.toArray(), ...this.level.playArea.max.toArray(), ...(this.level.spots ?? []).flatMap((p) => p.toArray())] } : {}),
+      ...(this.level?.unwrap ? { unwrap: { hash: this.level.unwrap.hash, reason: this.level.unwrap.reason } } : {}),
       ...(this.level?.layout?.applied ? { layout: { kind: this.level.layout.kind ?? 'seen', hash: this.level.layout.hash, gain: this.level.layout.gain } } : {}),
       ...(this.level?.pages ? { pages: { count: this.engine!.atlas.pageCount, size: this.engine!.atlas.pageSize, hash: this.level.pages.hash, gain: this.level.pages.gain } } : {}),
       ...(this.engine!.ao ? { ao: { size: this.engine!.ao.size, rays: this.engine!.ao.rays, radius: this.engine!.ao.radius } } : {}),
@@ -1312,8 +1333,8 @@ export class Session {
 }
 
 /** Whether the maps saved with a run were made on the layout the level has now. */
-function sameLayoutAs(meta: { layout?: { hash?: string }; pages?: { hash?: string } }, level?: Level): boolean {
-  return meta.layout?.hash === (level?.layout?.applied ? level.layout.hash : undefined) && meta.pages?.hash === level?.pages?.hash;
+function sameLayoutAs(meta: { unwrap?: { hash?: string }; layout?: { hash?: string }; pages?: { hash?: string } }, level?: Level): boolean {
+  return meta.unwrap?.hash === level?.unwrap?.hash && meta.layout?.hash === (level?.layout?.applied ? level.layout.hash : undefined) && meta.pages?.hash === level?.pages?.hash;
 }
 
 export { INDOOR, OUTDOOR };

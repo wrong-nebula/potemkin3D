@@ -416,7 +416,9 @@ export function mountUi(session: Session, panel: HTMLElement) {
     syncParts();
     void listRuns();
     const l = info.layout;
+    const u = 'unwrap' in info ? info.unwrap : undefined;
     say(`${name}: ${info.triangles.toLocaleString()} triangles, ${info.area.toLocaleString()} m² of surface` +
+      (u ? `. Its UVs were made from scratch (${u.reason}): ${u.charts.toLocaleString()} charts filling ${Math.round(100 * u.fill)}% of the texture` : '') +
       (!l ? '' : l.applied ? `. Players can see ${Math.round(100 * l.seenSurface)}% of it; laid out again, those faces get ${l.gain.toFixed(2)}× the texels along each side.`
         : `. Laying the texture out by what players see would gain only ${l.gain.toFixed(2)}×, so the level's own UVs are kept.`));
   }

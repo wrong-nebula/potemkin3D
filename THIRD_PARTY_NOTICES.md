@@ -7,6 +7,8 @@
 - **Funnel Sans and Red Hat Mono:** retained upstream video fonts under SIL OFL 1.1; notices remain in `video/fonts/`.
 - **Luxor photographs:** Alberto-g-rovi (CC BY-SA 3.0) and Holger Uwe Schmitt (CC BY-SA 4.0). Individual source links and modifications are listed in [reference credits](references/luxor/CREDITS.md). Photographs are not Apache-licensed.
 - **Material-lab stone exemplar:** cropped from Holger Uwe Schmitt's `05_relief_detail.jpg`, resized and processed into material fields. Related stone images in `experiments/material-lab/assets/` retain CC BY-SA 4.0 attribution to that source.
+- **xatlas:** MIT, copyright 2018-2020 Jonathan Young, through the [xatlasjs](https://github.com/repalash/xatlas.js) WebAssembly build (MIT, Palash Bansal). Bundled in the authoring tool for UV unwrapping; [license](licenses/XATLAS-LICENSE.txt), [source](https://github.com/jpcy/xatlas).
+- **Comlink:** Apache-2.0, copyright 2019 Google LLC; bundled in the authoring tool to talk to the xatlas worker, [source](https://github.com/GoogleChromeLabs/comlink).
 - **MCP TypeScript SDK:** Apache-2.0, Model Context Protocol contributors; installed through npm, [source](https://github.com/modelcontextprotocol/typescript-sdk).
 - **Zod:** MIT, Colin McDonnell and contributors; installed through npm, [source](https://github.com/colinhacks/zod).
 - **Other dependencies:** installed through npm under their own licenses. `package-lock.json` records the dependency versions. Model services and downloadable weights retain their providers' terms; their availability is not granted by this repository's license.

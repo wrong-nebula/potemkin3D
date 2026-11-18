@@ -65,7 +65,7 @@ The engine samples walkable ground, places eye-height cameras, checks visibility
 
 ### 2. Spend texture resolution on useful surfaces
 
-`layout.ts` repacks existing UV islands; it does not unwrap an arbitrary mesh. The `seen` layout reduces the allocation for hidden surfaces. The `near` layout also weights islands by player distance and joins compatible faces into strips. Multi-page packing divides a large scene among several atlases, cutting oversized islands when necessary while retaining a consistent scale across pages.
+`unwrap.ts` checks a file's UVs before anything else. When they are missing, collapsed, tiling or overlapping (any of these on over 2% of the surface or texture), it makes new ones with [xatlas](https://github.com/jpcy/xatlas) in a worker. Each part becomes charts of its own at one texel density across the level. `--unwrap always` unwraps regardless and `--unwrap off` keeps the file's UVs. `layout.ts` then repacks the UV islands, whichever made them. The `seen` layout reduces the allocation for hidden surfaces. The `near` layout also weights islands by player distance and joins compatible faces into strips. Multi-page packing divides a large scene among several atlases, cutting oversized islands when necessary while retaining a consistent scale across pages.
 
 ### 3. Paint views, preserve structure, and project
 
@@ -94,7 +94,7 @@ cp .env.example .env.local       # add your own FAL_KEY for generation
 npm run dev
 ```
 
-Open the URL printed by Vite, normally **http://localhost:5178**. Choose a sample or a UV-mapped, Y-up GLB, describe its materials, plan cameras, and then texture it. Named material parts improve the prompts. The local fal proxy reads the key server-side. Generation uses paid external model APIs; the included scene viewer, local map processing and ordinary tests do not need those calls.
+Open the URL printed by Vite, normally **http://localhost:5178**. Choose a sample or a Y-up GLB (one without usable UVs is unwrapped on load), describe its materials, plan cameras, and then texture it. Named material parts improve the prompts. The local fal proxy reads the key server-side. Generation uses paid external model APIs; the included scene viewer, local map processing and ordinary tests do not need those calls.
 
 A Luxor planning example:
 
@@ -139,7 +139,7 @@ python3 -m unittest discover -s test -p 'height_maps_test.py'
 
 ## Limitations and provenance
 
-- Geometry still needs usable UVs. Repacking improves allocation; it is not general-purpose UV unwrapping.
+- Automatic unwrapping uses xatlas's general-purpose charts. It doesn't yet weight charts by importance (the repacking layouts do that afterwards) or follow hand-authored seams, so a file with good UVs keeps its own by default.
 - Generated textures can contain hallucinated inscriptions, inconsistent details, residual lighting and seams. A fidelity check reduces mistakes without guaranteeing accuracy.
 - Atlas size, page count, POM and post-processing all consume GPU resources. Performance depends on resolution, hardware and enabled effects.
 - Some runtime detail layers are shader effects and are not baked into a plain GLB export.

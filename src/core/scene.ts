@@ -37,6 +37,22 @@ export interface Level {
   layout?: LevelLayout;
   /** Set when the texture is several: the islands were packed again over a grid of pages (core/layout.ts pagedLayout). */
   pages?: LevelPages;
+  /** Names of the meshes that came without texture coordinates (their UVs start at 0 and must be unwrapped). */
+  missingUV?: string[];
+  /** Set when the texture coordinates were made from scratch (core/unwrap.ts), before any layout above. */
+  unwrap?: LevelUnwrap;
+}
+
+export interface LevelUnwrap {
+  /** Why: the file's UVs failed the health check (or 'asked' when unwrapping was asked for regardless). */
+  reason: string;
+  meshes: number;
+  charts: number;
+  /** Share of the texture the charts fill. */
+  fill: number;
+  /** Fingerprint of the texture coordinates it made. */
+  hash: string;
+  seconds: number;
 }
 
 export interface LevelPages {
@@ -104,7 +120,11 @@ export function setTriangles(level: Level, t: { position: Float32Array; normal: 
   }
 }
 
-export async function loadLevel(source: string | ArrayBuffer, name = 'level'): Promise<Level> {
+/**
+ * @param opts.allowMissingUV take meshes without texture coordinates (with UVs at 0, listed in `missingUV`) instead
+ *   of refusing them: for a level that will be unwrapped (core/unwrap.ts)
+ */
+export async function loadLevel(source: string | ArrayBuffer, name = 'level', opts: { allowMissingUV?: boolean } = {}): Promise<Level> {
   const loader = new GLTFLoader();
   const gltf = typeof source === 'string'
     ? await loader.loadAsync(source)
@@ -112,6 +132,7 @@ export async function loadLevel(source: string | ArrayBuffer, name = 'level'): P
   gltf.scene.updateMatrixWorld(true);
   const parts: THREE.BufferGeometry[] = [];
   const labels: string[] = [];
+  const missingUV: string[] = [];
   gltf.scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
@@ -120,7 +141,11 @@ export async function loadLevel(source: string | ArrayBuffer, name = 'level'): P
     let g = mesh.geometry.clone();
     g.applyMatrix4(mesh.matrixWorld);
     if (g.index) g = g.toNonIndexed();
-    if (!g.getAttribute('uv')) throw new Error(`mesh "${mesh.name}" has no UVs; unwrap the level first`);
+    if (!g.getAttribute('uv')) {
+      if (!opts.allowMissingUV) throw new Error(`mesh "${mesh.name}" has no UVs; unwrap the level first`);
+      missingUV.push(mesh.name || label);
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(2 * g.getAttribute('position').count), 2));
+    }
     if (!g.getAttribute('normal')) g.computeVertexNormals();
     for (const k of Object.keys(g.attributes)) {
       if (k !== 'position' && k !== 'normal' && k !== 'uv' && k !== 'label') g.deleteAttribute(k);
@@ -160,7 +185,8 @@ export async function loadLevel(source: string | ArrayBuffer, name = 'level'): P
     tri.setFromAttributeAndIndices(pos, a, b, c);
     area += tri.getArea();
   }
-  return { name, labels, shapes, geometry, bvh, bounds: geometry.boundingBox!.clone(), triangles, surfaceArea: area };
+  return { name, labels, shapes, geometry, bvh, bounds: geometry.boundingBox!.clone(), triangles, surfaceArea: area,
+    ...(missingUV.length ? { missingUV } : {}) };
 }
 
 /** A readable part name: material name if it isn't a default, else the mesh name, without numeric suffixes. */
