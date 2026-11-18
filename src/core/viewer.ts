@@ -299,11 +299,15 @@ export class Viewer {
         return t;
       };
       m.normalMap = make(maps.normal);
-      m.roughnessMap = make(maps.orm);
+      const orm = make(maps.orm);
+      m.roughnessMap = orm;
+      m.metalnessMap = orm;
       m.roughness = 1;
+      m.metalness = 1;
     } else {
-      m.normalMap = m.roughnessMap = null;
+      m.normalMap = m.roughnessMap = m.metalnessMap = null;
       m.roughness = 0.92;
+      m.metalness = 0;
     }
     this.setRelief(this.relief);
     m.needsUpdate = true;
@@ -403,11 +407,13 @@ export class Viewer {
   /** Pink markers for player points and planned cameras. */
   showPlan(points: THREE.Vector3[], views: ViewSpec[], scale = 0.9, color: THREE.ColorRepresentation = PINK) {
     this.clearOverlay();
-    this.points = new THREE.Points(new THREE.BufferGeometry().setFromPoints(points.map((p) => p.clone().setY(p.y - 1.6))),
+    const isObject = this.engine.level.mode === 'object';
+    const markerScale = isObject ? Math.max(0.08, Math.min(0.9, this.engine.level.bounds.getSize(new THREE.Vector3()).length() * 0.14)) : scale;
+    this.points = new THREE.Points(new THREE.BufferGeometry().setFromPoints(points.map((p) => (isObject ? p.clone() : p.clone().setY(p.y - 1.6)))),
       new THREE.PointsMaterial({ color, size: 7, sizeAttenuation: false, depthTest: true }));
     this.overlay.add(this.points);
     const segs: number[] = [];
-    for (const v of views) frustumSegments(v, scale, segs);
+    for (const v of views) frustumSegments(v, markerScale, segs);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
     this.frusta = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 }));

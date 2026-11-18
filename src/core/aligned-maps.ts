@@ -73,8 +73,8 @@ export function buildAlignedMaps(source: AlignedMapSource, geometry: { pos: Floa
     const rough = source.roughness ? source.roughness[i + 1] / 255 - sourceBase : 0;
     orm[i] = source.roughness?.[i] ?? 255;
     orm[i + 1] = 255 * Math.min(1, Math.max(.08, base + rough * (assigned ? response.roughnessGain : 1)));
-    // Paint, ceramic, stone and timber are dielectrics. An exposed-metal mask is needed to make chipped paint metallic.
-    orm[i + 2] = 0; orm[i + 3] = 255;
+    // Paint, ceramic, stone, timber, fabric and organic presets are dielectrics (0); explicit `metal` writes glTF ORM B.
+    orm[i + 2] = assigned && response.metalness ? Math.round(255 * response.metalness) : 0; orm[i + 3] = 255;
     if (label < 0 || geometry.nrm[i + 3] < .5) continue;
     if (!assigned && !heights && source.normal) continue;
     let nx = 0, ny = 0, nz = 1;

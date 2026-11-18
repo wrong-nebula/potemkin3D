@@ -24,6 +24,7 @@ export const planOptions = object(optional({
   roofDistance: positive, floors: count, floorHeight: positive, holes: count, cleanup: count,
   seed: z.number().int(), objective: z.enum(['coverage', 'sharpness', 'fisher']), lookAt: count,
   adaptive: z.boolean(), geodesic: z.boolean(),
+  mode: z.enum(['auto', 'level', 'object']), focusParts: z.array(text),
 }));
 const note = object({ text, at: vector, size: positive.optional(), to: vector.optional() });
 const setting = object(optional({ place: text, carriers: text, details: text, additions: z.array(text), materials: text, fill: text, ground: text, light: text }));
@@ -40,7 +41,8 @@ const weightOverlay = z.enum(['off','openness','curvature','light','class','impo
 const loadOptions = object(optional({ lighting: z.enum(['overcast','outdoor','indoor','indoor-soft']),
   atlasSize: size, viewSize: size, name: id, layout: z.enum(['file','seen','near']),
   area: z.array(number).min(6), pages: z.union([z.literal(1),z.literal(4),z.literal(16)]),
-  unwrap: z.enum(['auto','always','off']), cavity: z.number().min(0).max(0.99), weights: z.boolean() }));
+  unwrap: z.enum(['auto','always','off']), cavity: z.number().min(0).max(0.99), weights: z.boolean(),
+  mode: z.enum(['auto','level','object']) }));
 const camera = object({ position: vector, target: vector, ...optional({ fov: number.min(10).max(140),
   width: size, height: size, mode: z.enum(['clay','textured','lit']), overlay: z.boolean(), weights: weightOverlay }) });
 const step = (op, fields = {}) => object({ op: z.literal(op), ...fields });
@@ -65,7 +67,7 @@ export const steps = [
   step('pbr', { options: object(optional({ size, seed: z.number().int(), strength: number.min(0), baseRoughness: fraction,
     roughnessGain: number.min(0), parallel: z.number().int().min(1).max(16) })).optional() }),
   step('nameParts', { style: text.optional() }),
-  step('materialPresets', { assignments: z.record(z.string(), z.enum(['limestone','glazed-tile','painted-metal','timber'])) }),
+  step('materialPresets', { assignments: z.record(z.string(), z.enum(['limestone','glazed-tile','painted-metal','timber','hard-surface','metal','fabric','organic'])) }),
   step('materialMaps', { options: object({ size, layoutHash: text, ...optional({ heightUrl: text, normalUrl: text,
     roughnessUrl: text, roughnessBase: fraction }) }) }),
   step('floorDetail', { options: object({label:text,layoutHash:text,packedUrl:text,protectUrl:text,statisticsUrl:text,

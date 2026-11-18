@@ -9,6 +9,7 @@
 //     [--cavity 0.7] with --layout seen|near: enclosed islands (creases, recesses) drawn smaller, down to that scale
 //     [--weights]    geometry prepasses (openness, convex curvature, light, semantic class) weighting layout and camera planning
 //     [--adaptive]   iterative importance-driven camera planning (geodesic + surface weights + Fisher detail + adaptive lenses)
+//     [--mode auto|level|object] [--focus barrel,face]  discrete prop/character/vehicle mode (enclosing sphere + close-ups)
 //     [--layout seen] lay the texture out again so the faces players can see get the texels (the exported GLB carries the new UVs)
 //     [--full]       a clean-up pass, hard parts textured on their own, and the finishing fill (add --floors 12 for plain ground
 //                    such as concrete: on patterned ground the floor pass still drifts in scale from view to view)
@@ -66,6 +67,8 @@ const { values: a } = parseArgs({
     full: { type: 'boolean', default: false },     // the passes that have earned their place: --cleanup 10 --parts 5 --finish, each unless given   // give what no view painted its part's colours, so no clay is left (no model call)     // max views aimed at what players see that is unpainted or poorly captured
     objective: { type: 'string', default: 'coverage' },    // 'coverage', 'sharpness', or 'fisher'
     adaptive: { type: 'boolean', default: false },         // iterative importance-driven refinement (geodesic + surface weights + Fisher metric + adaptive lenses)
+    mode: { type: 'string', default: 'auto' },             // 'auto' (default), 'level', or 'object' (Fibonacci sphere + feature close-ups for props/characters/vehicles)
+    focus: { type: 'string' },                             // in object mode: comma-separated part names to give close-up cameras (e.g. 'barrel,face,wheel')
     'look-at': { type: 'string', default: '0' },           // extra candidate cameras aimed at each patch of surface, per patch
     parallel: { type: 'string', default: '1' },
     atlas: { type: 'string', default: '4096' },
@@ -147,6 +150,11 @@ if (!given('weights') && a.resume) {
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8'));
   if (saved.layout?.weights || saved.weights) a.weights = true;
 }
+if (!given('mode') && a.resume) {
+  const fs = await import('node:fs');
+  const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8'));
+  if (saved.mode) a.mode = saved.mode;
+}
 if (!a.area && a.resume) {
   const fs = await import('node:fs');
   const saved = JSON.parse(fs.readFileSync(`runs/${a.resume}/run.json`, 'utf8')).area;
@@ -176,14 +184,15 @@ try {
       else log(JSON.stringify(e));
     },
   });
-  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap, cavity, weights]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity: +cavity, weights }),
-    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap, a.cavity ?? '0', !!a.weights]);
+  const info = await page.evaluate(([lvl, lighting, atlas, viewSize, layout, area, pages, unwrap, cavity, weights, mode]) => window.trompe.load(`/${lvl}`, { lighting, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity: +cavity, weights, mode }),
+    [a.level, a.lighting, a.atlas, a['view-size'], a.layout, area, +(a.pages ?? 1), a.unwrap, a.cavity ?? '0', !!a.weights, a.mode]);
   log(`level: ${JSON.stringify(info)}`);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) {
     log(`projection: ${JSON.stringify(await page.evaluate((o) => window.trompe.projection(o),
       { ...(a['min-cos'] ? { minCos: +a['min-cos'] } : {}), ...(a['edge-guard'] ? { edgeGuard: +a['edge-guard'] } : {}), ...(a['frame-margin'] ? { frameMargin: +a['frame-margin'] } : {}) }))}`);
   }
-  const planOpts = { maxViews: +a.views, spacing: +a.spacing, aerial: +a.aerial, roofs: +a.roofs, floors: +a.floors, holes: +a.holes, cleanup: +a.cleanup, maxParallel: +a.parallel, objective: a.objective, lookAt: +a['look-at'], ...(a.adaptive ? { adaptive: true } : {}) };
+  const focusParts = a.focus ? a.focus.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const planOpts = { maxViews: +a.views, spacing: +a.spacing, aerial: +a.aerial, roofs: +a.roofs, floors: +a.floors, holes: +a.holes, cleanup: +a.cleanup, maxParallel: +a.parallel, objective: a.objective, lookAt: +a['look-at'], ...(a.adaptive ? { adaptive: true } : {}), ...(a.mode !== 'auto' ? { mode: a.mode } : {}), ...(focusParts?.length ? { focusParts } : {}) };
   const opts = { firstModel: a.first, fillModel: a.fill, diffuse: a.diffuse, gapNotes: a['gap-notes'], ...(a['hole-model'] ? { holeModel: a['hole-model'] } : {}), ...(a.references !== undefined ? { references: +a.references } : {}), ...(a.wording ? { wording: a.wording } : {}), ...(a.notes ? { notes: JSON.parse((await import('node:fs')).readFileSync(a.notes, 'utf8')) } : {}), plan: planOpts, nameParts: !a['no-names'], check: !a['no-check'], checkPlanes: !a['no-planes'], checkCells: a['check-cells'], ...(look.setting ? { setting: look.setting } : {}), ...(look.styleImages ? { styleImages: look.styleImages } : {}), ...(look.styleMax ? { styleMax: look.styleMax } : {}), styleReference: a['style-reference'], checkRetries: +a['check-retries'], checkThreshold: +a['check-threshold'], ...(a.style ? { style: a.style } : {}),
   ...(a['roof-style'] ? { roofStyle: a['roof-style'] } : {}), ...(a['floor-style'] ? { floorStyle: a['floor-style'] } : {}) };
   if (a.resume) {

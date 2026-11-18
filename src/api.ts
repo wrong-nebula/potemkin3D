@@ -8,6 +8,7 @@ import type { PbrOptions } from './core/pbr';
 import type { PlanOptions } from './core/planner';
 import { configureFal } from './providers/fal';
 import { DEFAULT_PLAN, plan as makePlan, planStats, samplePlayerPoints } from './core/planner';
+import { objectEyes } from './core/object-plan';
 import { seenCells } from './core/layout';
 import { PAINTED } from './core/atlas';
 import type { GroundOptions } from './core/ground';
@@ -99,9 +100,9 @@ export function makeApi(session: Session) {
       return session.viewer.floorDetailState;
     },
     demo: new Demo(session),
-    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number; weights?: boolean } = {}) {
+    async load(url: string, opts: { lighting?: string; atlasSize?: number; viewSize?: number; name?: string; layout?: 'file' | 'seen' | 'near'; area?: number[]; pages?: number; unwrap?: 'auto' | 'always' | 'off'; cavity?: number; weights?: boolean; mode?: 'auto' | 'level' | 'object' } = {}) {
       const name = opts.name ?? url.split('/').pop()!.replace(/\.\w+$/, '');
-      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0, !!opts.weights);
+      return session.load(url, name, LIGHTING[opts.lighting ?? 'outdoor'], opts.atlasSize ?? 4096, opts.viewSize ?? 2048, opts.layout ?? 'file', opts.area, opts.pages ?? 1, opts.unwrap ?? 'auto', opts.cavity ?? 0, !!opts.weights, opts.mode ?? 'auto');
     },
     /** Compute the four geometry prepasses (openness, convex curvature, static light, semantic class) and optionally display a false-colour debug overlay. */
     weights(overlay?: WeightOverlay) {
@@ -122,6 +123,7 @@ export function makeApi(session: Session) {
     plan(opts: Partial<PlanOptions> = {}) {
       const p = session.makePlan(opts);
       return { views: p.views.length, points: p.points.length, waves: p.waves.map((w) => w.length),
+        mode: p.mode ?? session.level?.mode ?? 'level',
         predicted: p.predicted[p.predicted.length - 1], sharpness: p.sharpness, texture: p.texture,
         ...(p.budget ? { budget: p.budget } : {}), stats: { ...planStats },
         pitch: p.views.map((v) => Math.round(THREE.MathUtils.radToDeg(v.pitch))), fov: p.views.map((v) => v.fov),
@@ -406,7 +408,7 @@ export function makeApi(session: Session) {
       // what a player can see, from spots much denser than the cameras', and how much of that is painted
       const V = 256;
       const cells = e.atlas.texelGeometry(V), quality = e.atlas.cellQuality(V);
-      const eyes = samplePlayerPoints(e.level, { ...DEFAULT_PLAN, spacing: 1.5 });
+      const eyes = e.level.mode === 'object' ? objectEyes(e.level, 48) : samplePlayerPoints(e.level, { ...DEFAULT_PLAN, spacing: 1.5 });
       const visible = seenCells(cells.pos, cells.nrm, e.level.bvh, eyes);
       let island = 0, seen = 0, painted = 0, filled = 0;
       for (let i = 0; i < V * V; i++) {

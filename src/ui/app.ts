@@ -107,6 +107,8 @@ export function mountUi(session: Session, panel: HTMLElement) {
   for (const [v, l] of [['2048', '2K views'], ['1024', '1K views (quicker, a little cheaper, about half the detail)']]) viewSel.append(h('option', { value: v }, l));
   const layoutSel = h('select');
   for (const [v, l] of [['file', "The level's own UVs"], ['seen', 'Texture laid out by what players see'], ['near', 'Faces joined, sized by how near players get']]) layoutSel.append(h('option', { value: v }, l));
+  const modeSel = h('select', { 'aria-label': 'Planner mode' });
+  for (const [v, l] of [['auto', 'Mode · Auto (level or standalone prop)'], ['level', 'Mode · Level (walkable floor)'], ['object', 'Mode · Object (Fibonacci sphere + close-ups)']]) modeSel.append(h('option', { value: v }, l));
   const planBtn = h('button', {}, 'Plan cameras');
   const runBtn = h('button', { class: 'primary' }, 'Texture level');
   const stopBtn = h('button', {}, 'Stop');
@@ -178,7 +180,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
       h('label', { class: 'row note' }, checkBox, 'Check each view against the blockout and repaint what the model painted over (SAM 2.1, runs in this tab)'),
       h('label', { class: 'row note' }, planesBox, 'Also check that flat walls and floors come out flat and facing the right way (MoGe-2 on fal, about 1¢ a view)'),
       h('label', { class: 'row note' }, swatchBox, 'Show mostly-unpainted views material samples from the texture so far (experimental)'),
-      atlasSel, viewSel, layoutSel, h('div', { class: 'row' }, planBtn, stopBtn), runBtn),
+      atlasSel, viewSel, layoutSel, modeSel, h('div', { class: 'row' }, planBtn, stopBtn), runBtn),
     h('section', {}, h('div', { class: 'stats' }, sViews, sCov, sCost, sTime),
       h('div', { class: 'thumbs' }, thumbSees, thumbPaints), h('div', { class: 'row note' }, h('span', {}, 'Model sees'), h('span', {}, 'Model paints'))),
     h('section', {}, h('label', {}, 'Materials'), materialSurface, materialPreset, materialNote, suggestMaterials, pbrBtn,
@@ -433,7 +435,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
     atlasSel.title = layoutSel.title = prepared ? 'The prepared Sento floor keeps its reviewed texture and UV layout.' : '';
     if (prepared) { atlasSel.value = '2048'; layoutSel.value = 'file'; }
     const info = prepared ? await session.loadSentoFloor(+viewSel.value) :
-      await session.load(src, name, LIGHTING[lighting], +atlasSel.value, +viewSel.value, layoutSel.value as 'file' | 'seen' | 'near', area);
+      await session.load(src, name, LIGHTING[lighting], +atlasSel.value, +viewSel.value, layoutSel.value as 'file' | 'seen' | 'near', area, 1, 'auto', 0, false, modeSel.value as 'auto' | 'level' | 'object');
     setLighting(lighting);
     setMode(prepared ? 'lit' : 'clay');
     walking(false);
@@ -444,12 +446,12 @@ export function mountUi(session: Session, panel: HTMLElement) {
     void listRuns();
     const l = info.layout;
     const u = 'unwrap' in info ? info.unwrap : undefined;
-    say(`${name}: ${info.triangles.toLocaleString()} triangles, ${info.area.toLocaleString()} m² of surface` +
+    say(`${name}${info.mode === 'object' ? ' (object mode)' : ''}: ${info.triangles.toLocaleString()} triangles, ${info.area.toLocaleString()} m² of surface` +
       (u ? `. Its UVs were made from scratch (${u.reason}): ${u.charts.toLocaleString()} charts filling ${Math.round(100 * u.fill)}% of the texture` : '') +
       (!l ? '' : l.applied ? `. Players can see ${Math.round(100 * l.seenSurface)}% of it; laid out again, those faces get ${l.gain.toFixed(2)}× the texels along each side.`
         : `. Laying the texture out by what players see would gain only ${l.gain.toFixed(2)}×, so the level's own UVs are kept.`));
   }
-  atlasSel.onchange = viewSel.onchange = layoutSel.onchange = () => sample.onchange?.(new Event('change'));
+  atlasSel.onchange = viewSel.onchange = layoutSel.onchange = modeSel.onchange = () => sample.onchange?.(new Event('change'));
   sample.onchange = () => {
     const s = SAMPLES.find((x) => x.url === sample.value)!;
     style.value = s.style;
@@ -469,7 +471,18 @@ export function mountUi(session: Session, panel: HTMLElement) {
     if (f) void loadFile(f).catch((err) => say(String(err)));
   };
 
-  const planOpts = () => ({ maxViews: +budget.value, adaptive: adaptiveBox.checked, aerial: aerialBox.checked ? 8 : 0, roofs: aerialBox.checked ? 24 : 0, floors: floorBox.checked ? 24 : 0, holes: 12 });
+  const planOpts = () => {
+    const obj = modeSel.value === 'object' || (modeSel.value === 'auto' && session.level?.mode === 'object');
+    return {
+      maxViews: +budget.value,
+      adaptive: adaptiveBox.checked,
+      mode: modeSel.value as 'auto' | 'level' | 'object',
+      aerial: !obj && aerialBox.checked ? 8 : 0,
+      roofs: !obj && aerialBox.checked ? 24 : 0,
+      floors: !obj && floorBox.checked ? 24 : 0,
+      holes: obj ? 0 : 12,
+    };
+  };
   planBtn.onclick = () => {
     try {
       const p = session.makePlan(planOpts());

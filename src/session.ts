@@ -29,6 +29,7 @@ import { editMask, masksFromState } from './core/composite';
 import { makeCamera, lookAt } from './core/views';
 import { resizeRGBA } from './core/image';
 import { loadLevel, setTriangles, type Level } from './core/scene';
+import { objectEyes } from './core/object-plan';
 import { cavityScale, faceOpenness, suggestPresetsFromWeights, surfaceWeights, weightScale, writeWeightAttribute, type SurfaceWeights } from './core/surface-weights';
 import { unwrap as unwrapUVs, uvHealth, type UvHealth } from './core/unwrap';
 import { browserXatlas } from './core/xatlas-browser';
@@ -76,9 +77,12 @@ export class Session {
    * @param weights run all four geometry prepasses (openness, convex curvature, static light and semantic class,
    *   core/surface-weights.ts), store a per-triangle `weight` attribute alongside `label` for camera planning, and
    *   (with 'seen' or 'near') weight island packing and keep same-class islands together
+   * @param mode 'level': walkable ground cameras; 'object': discrete prop/weapon/character/vehicle (enclosing sphere);
+   *   'auto' (default): 'object' when the mesh has no walkable player floor or is under 4.5 m across, else 'level'
    */
   async load(source: string | ArrayBuffer, name: string, lighting: Lighting = OUTDOOR, atlasSize = 4096, viewSize = 2048,
-    layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1, unwrap: 'auto' | 'always' | 'off' = 'auto', cavity = 0, weights = false) {
+    layout: 'file' | 'seen' | 'near' = 'file', area?: number[], pages = 1, unwrap: 'auto' | 'always' | 'off' = 'auto', cavity = 0, weights = false,
+    mode: 'auto' | 'level' | 'object' = 'auto') {
     if (cavity && !(cavity > 0 && cavity < 1)) throw new Error(`cavity is the smallest scale for an enclosed island, between 0 and 1, not ${cavity}`);
     if (cavity && layout === 'file') throw new Error("cavity needs a layout that is packed again: 'seen' or 'near'");
     this.viewer?.dispose();
@@ -111,6 +115,11 @@ export class Session {
       for (let i = 6; i + 2 < area.length; i += 3) spots.push(new THREE.Vector3(area[i], area[i + 1], area[i + 2]));
       if (spots.length) this.level.spots = spots;
     }
+    const diag = this.level.bounds.getSize(new THREE.Vector3()).length();
+    const walkEyes = mode === 'object' ? [] : samplePlayerPoints(this.level, { ...DEFAULT_PLAN, spacing: 2 });
+    const resolvedMode: 'level' | 'object' = mode === 'auto' ? (!walkEyes.length || diag < 4.5 ? 'object' : 'level') : mode;
+    this.level.mode = resolvedMode;
+    const layoutEyes = resolvedMode === 'object' ? objectEyes(this.level, 48) : walkEyes;
     const minScale = cavity || 0.7;
     const sw = weights ? surfaceWeights(this.level, lighting, { minScale }) : undefined;
     if (sw) {
@@ -121,8 +130,7 @@ export class Session {
     if (layout === 'seen') {
       const t0 = performance.now();
       const level = this.level, g = level.geometry;
-      // where players' eyes can be, sampled more densely than the cameras are: a player walks everywhere
-      const eyes = samplePlayerPoints(level, { ...DEFAULT_PLAN, spacing: 2 });
+      const eyes = layoutEyes;
       const position = g.getAttribute('position').array, uv = g.getAttribute('uv').array;
       const cav = !sw && cavity ? this.cavityWeights(uv, cavity) : undefined;
       if (cav) writeWeightAttribute(g, cav.weight);
@@ -138,7 +146,7 @@ export class Session {
     if (layout === 'near') {
       const t0 = performance.now();
       const level = this.level, g = level.geometry;
-      const eyes = samplePlayerPoints(level, { ...DEFAULT_PLAN, spacing: 2 });
+      const eyes = layoutEyes;
       const position = g.getAttribute('position').array, uv = g.getAttribute('uv').array, label = g.getAttribute('label').array;
       const part = new Int32Array(position.length / 9);
       for (let t = 0; t < part.length; t++) part[t] = label[3 * t];
@@ -165,7 +173,7 @@ export class Session {
     this.viewer = new Viewer(this.engine, this.canvas);
     this.plan = undefined;
     this.record = undefined;
-    return { triangles: this.level.triangles, area: Math.round(this.level.surfaceArea),
+    return { triangles: this.level.triangles, area: Math.round(this.level.surfaceArea), mode: this.level.mode,
       ...(uvHealthInfo ? { uvHealth: uvHealthInfo } : {}), ...(this.level.unwrap ? { unwrap: this.level.unwrap } : {}),
       ...(this.level.weights ? { weights: this.level.weights } : {}),
       ...(this.level.layout ? { layout: this.level.layout } : {}),
@@ -1259,6 +1267,7 @@ export class Session {
       ...(r.partPass?.length ? { partPass: r.partPass } : {}),
       ...(this.viewer?.floorDetailSettings ? { floorDetail: this.viewer.floorDetailSettings } : {}),
       materialPresets: { ...this.engine!.materialPresets },
+      ...(this.level?.mode === 'object' ? { mode: 'object' as const } : {}),
       ...(this.level?.playArea ? { area: [...this.level.playArea.min.toArray(), ...this.level.playArea.max.toArray(), ...(this.level.spots ?? []).flatMap((p) => p.toArray())] } : {}),
       ...(this.level?.unwrap ? { unwrap: { hash: this.level.unwrap.hash, reason: this.level.unwrap.reason } } : {}),
       ...(this.level?.weights && !this.level?.layout?.applied ? { weights: true } : {}),

@@ -8,6 +8,7 @@ import { forEachTriangle, type Level } from './scene';
 import { looksLikeRoof, ROOF_MIN_NY, roofLabels } from './semantics';
 import { cellWeights } from './surface-weights';
 import { adaptiveGroundViews, budgetAdvice, combinedPlanWeights, selectFisherViews, type BudgetAdvice } from './adaptive-plan';
+import { planObject } from './object-plan';
 import type { ViewRenderer, ViewSpec } from './views';
 import { lookAt, makeCamera } from './views';
 
@@ -62,6 +63,10 @@ export interface PlanOptions {
   geodesic?: boolean;
   /** Atlas resolution along a side (px), for sparse PBR height-tile budget advice. */
   atlasSize?: number;
+  /** 'level': walkable ground cameras; 'object': enclosing Fibonacci sphere + feature close-ups; 'auto' (default): level when walkable, else object. */
+  mode?: 'auto' | 'level' | 'object';
+  /** In object mode: part names (or substrings) that receive dedicated close-up probes (e.g. ['barrel', 'face', 'wheel']). */
+  focusParts?: string[];
 }
 
 export const DEFAULT_PLAN: PlanOptions = {
@@ -88,6 +93,8 @@ export interface Plan {
   texture?: { seen: number };
   /** Spend & bottleneck report from adaptive / Fisher planning (core/adaptive-plan.ts). */
   budget?: BudgetAdvice;
+  /** Which planner mode produced the views ('level' by default, 'object' for discrete assets). */
+  mode?: 'level' | 'object';
 }
 
 /** The texture cells a camera sees with the best quality per cell, and (when asked for) what its frame holds. */
@@ -724,9 +731,20 @@ export function selectViews(lists: CellList[], o: PlanOptions, aerial: boolean[]
 export function plan(gpu: Gpu, level: Level, views: ViewRenderer, opts: Partial<PlanOptions> = {}, existing?: Float32Array,
   surface?: Surface): Plan {
   const o = { ...DEFAULT_PLAN, ...opts };
+  const wantMode = o.mode ?? level.mode ?? 'auto';
+  if (wantMode === 'object') {
+    level.mode = 'object';
+    return planObject(gpu, level, views, o, existing, surface);
+  }
   const G2 = o.grid * o.grid;
   const points = samplePlayerPoints(level, o);
-  if (!points.length) throw new Error('found nowhere to stand: is the level Y-up with walkable floors?');
+  if (!points.length) {
+    if (wantMode === 'auto') {
+      level.mode = 'object';
+      return planObject(gpu, level, views, o, existing, surface);
+    }
+    throw new Error('found nowhere to stand: is the level Y-up with walkable floors?');
+  }
   const byAdaptive = !!o.adaptive && !!surface;
   const byFisher = (byAdaptive || o.objective === 'fisher') && !!surface;
   const bySharpness = !byFisher && o.objective === 'sharpness' && !!surface;

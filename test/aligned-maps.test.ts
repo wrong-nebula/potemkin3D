@@ -22,11 +22,11 @@ const pixel = (x: number, y = 16) => 4 * (y * size + x);
 const base: AlignedMapSource = { size, layoutHash: 'fixture', kind: 'flat', roughnessBase: .92 };
 
 describe('aligned material responses', () => {
-  it('gives each preset its own roughness without making paint or timber metallic', () => {
+  it('gives each preset its own roughness and metalness without making paint or timber metallic', () => {
     for (const [id, preset] of Object.entries(MATERIAL_PRESETS)) {
       const { normal, orm } = buildAlignedMaps(base, geometry(), ['surface'], { surface: id as keyof typeof MATERIAL_PRESETS });
       expect(orm[pixel(16) + 1]).toBe(Math.round(preset.roughness * 255));
-      expect(orm[pixel(16) + 2]).toBe(0);
+      expect(orm[pixel(16) + 2]).toBe(id === 'metal' ? Math.round(preset.metalness * 255) : 0);
       expect(Array.from(normal.slice(pixel(16), pixel(16) + 3))).toEqual([128, 128, 255]);
     }
   });

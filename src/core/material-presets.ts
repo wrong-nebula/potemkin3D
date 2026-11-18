@@ -1,15 +1,19 @@
 /** Artist-selected starting points, not measured properties of the photographed surfaces. */
 export const MATERIAL_PRESETS = {
-  limestone: { name: 'Limestone', roughness: .82, roughnessGain: .55, fallbackRelief: .3, heightMetres: .0012, maxSlope: .45 },
-  'glazed-tile': { name: 'Glazed tile', roughness: .32, roughnessGain: 1, fallbackRelief: .18, heightMetres: .002, maxSlope: .85 },
-  'painted-metal': { name: 'Painted metal', roughness: .42, roughnessGain: .4, fallbackRelief: .15, heightMetres: .00025, maxSlope: .2 },
-  timber: { name: 'Timber', roughness: .62, roughnessGain: .7, fallbackRelief: .25, heightMetres: .0007, maxSlope: .35 },
+  limestone: { name: 'Limestone', roughness: .82, roughnessGain: .55, fallbackRelief: .3, heightMetres: .0012, maxSlope: .45, metalness: 0 },
+  'glazed-tile': { name: 'Glazed tile', roughness: .32, roughnessGain: 1, fallbackRelief: .18, heightMetres: .002, maxSlope: .85, metalness: 0 },
+  'painted-metal': { name: 'Painted metal', roughness: .42, roughnessGain: .4, fallbackRelief: .15, heightMetres: .00025, maxSlope: .2, metalness: 0 },
+  timber: { name: 'Timber', roughness: .62, roughnessGain: .7, fallbackRelief: .25, heightMetres: .0007, maxSlope: .35, metalness: 0 },
+  'hard-surface': { name: 'Hard surface', roughness: .48, roughnessGain: .5, fallbackRelief: .18, heightMetres: .0004, maxSlope: .3, metalness: 0 },
+  metal: { name: 'Bare metal', roughness: .28, roughnessGain: .65, fallbackRelief: .14, heightMetres: .0003, maxSlope: .22, metalness: .85 },
+  fabric: { name: 'Fabric', roughness: .88, roughnessGain: .75, fallbackRelief: .28, heightMetres: .0009, maxSlope: .42, metalness: 0 },
+  organic: { name: 'Organic', roughness: .74, roughnessGain: .65, fallbackRelief: .24, heightMetres: .0008, maxSlope: .38, metalness: 0 },
 } as const;
 
 export type MaterialPresetId = keyof typeof MATERIAL_PRESETS;
 export type MaterialAssignments = Record<string, MaterialPresetId>;
 export interface MaterialResponse {
-  name: string; roughness: number; roughnessGain: number; fallbackRelief: number; heightMetres: number; maxSlope: number;
+  name: string; roughness: number; roughnessGain: number; fallbackRelief: number; heightMetres: number; maxSlope: number; metalness?: number;
 }
 export const CONSERVATIVE_MATERIAL: MaterialResponse = {
   name: 'Unclassified', roughness: .88, roughnessGain: .6, fallbackRelief: .25, heightMetres: .0004, maxSlope: .25,

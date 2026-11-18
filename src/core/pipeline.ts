@@ -319,7 +319,9 @@ export function prepareView(engine: Engine, spec: ViewSpec, o: PipelineOptions, 
   const shells = shapes?.map((p) => p.area > 0.4 * engine.level.surfaceArea);
   const desc = describeView(cls, labels, S, isFirst ? undefined : edit, shells);
   const prompt: PromptContext = { look: o.style, roofLook: o.roofStyle, parts: desc.parts,
-    mode: roofPass ? 'roof' : floorPass ? 'floor' : isFirst ? 'first' : 'fill', floor: desc.floorShare > 0.5, overcast: !!engine.clay.lighting.overcast, indirect: !!engine.clay.lighting.indirect };
+    mode: roofPass ? 'roof' : floorPass ? 'floor' : isFirst ? 'first' : 'fill', floor: engine.level.mode !== 'object' && desc.floorShare > 0.5,
+    overcast: !!engine.clay.lighting.overcast, indirect: !!engine.clay.lighting.indirect,
+    ...(engine.level.mode === 'object' ? { object: true } : {}) };
   if (floorPass) {
     let known = 0, all = 0;
     for (let i = 0; i < S * S; i++) { all += geometry[i]; known += geometry[i] & masks.known[i]; }

@@ -123,6 +123,8 @@ export interface PromptContext {
    * that each is a part of its own.
    */
   shapes?: boolean;
+  /** Discrete standalone object mode (prop, weapon, character, vehicle) rather than an architectural room or street. */
+  object?: boolean;
 }
 
 /**
@@ -230,10 +232,11 @@ const light = (c: PromptContext) => (c.diffuse ? 'no lighting or shading of any 
   : c.overcast
   ? c.setting?.light ?? 'soft, even overcast daylight with no cast shadows and no sunlit patches'
   : 'the same light direction and shadows');
-const surfaces = (c: PromptContext) =>
-  `${c.setting?.carriers ?? 'Walls'} may show flat details such as ${c.setting?.details ?? 'windows, doors, shutters and stonework'}, but nothing sticks out of them and ` +
-  `${c.notes ? 'apart from what the notes ask for, nothing new is added' : 'nothing new is added'}: no ${forbidden(`${c.parts} ${c.notes ?? ''}`, c.setting?.additions)}.` +
-  (c.floor ? ` The ground stays clear: ${c.setting?.ground ?? 'bare paving'}.` : '');
+const surfaces = (c: PromptContext) => c.object
+  ? `Every part of the object keeps its exact silhouette, edges and proportions; ${c.notes ? 'apart from what the notes ask for, nothing new is added' : 'nothing is added around or behind the object'}: no people, text, labels, pedestals or background scenery.`
+  : `${c.setting?.carriers ?? 'Walls'} may show flat details such as ${c.setting?.details ?? 'windows, doors, shutters and stonework'}, but nothing sticks out of them and ` +
+    `${c.notes ? 'apart from what the notes ask for, nothing new is added' : 'nothing new is added'}: no ${forbidden(`${c.parts} ${c.notes ?? ''}`, c.setting?.additions)}.` +
+    (c.floor ? ` The ground stays clear: ${c.setting?.ground ?? 'bare paving'}.` : '');
 /** The bare materials a gap is filled with, and how the fill continues its surface. */
 const bare = (c: PromptContext) => c.setting?.materials ?? 'masonry, plaster, concrete, metal or wood';
 const unbroken = (c: PromptContext) => c.setting?.fill ?? 'unbroken and empty from edge to edge';

@@ -34,8 +34,10 @@ export async function exportGlb(engine: Engine): Promise<ArrayBuffer> {
     if (!engine.clay.lighting.overcast) return new THREE.MeshBasicMaterial({ map });
     if (pbr) {
       const orm = texture(pageOf(ormAll!, pbr.size, grid, k), pbr.size / grid);
+      let hasMetal = false;
+      for (let i = 2; i < ormAll!.length; i += 4) if (ormAll![i] > 0) { hasMetal = true; break; }
       return new THREE.MeshStandardMaterial({ map, normalMap: texture(pageOf(pbr.normal, pbr.size, grid, k), pbr.size / grid),
-        roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 0, ...(ao ? { aoMap: orm } : {}) });
+        roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: hasMetal ? 1 : 0, ...(ao ? { aoMap: orm } : {}) });
     }
     return new THREE.MeshStandardMaterial({ map, roughness: 0.92, metalness: 0, ...(ao ? { aoMap: texture(pageOf(aoAll!, ao.size, grid, k), ao.size / grid) } : {}) });
   };

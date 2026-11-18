@@ -52,15 +52,14 @@ Paper references in the source notes have not been checked yet (in particular "L
 
 **Done when:** the unpainted share after views drops to ~0 without the finishing fill, and relit stills show less baked shading than the current output on the same run.
 
-## 5. Object mode (props, weapons, characters, vehicles)
+## 5. ~~Object mode (props, weapons, characters, vehicles)~~ (done: `src/core/object-plan.ts`, `--mode auto|level|object`, `--focus`, object presets)
 
 **Why:** the planner is built for levels: walkable ground, eye height, roofs, rings and holes. Discrete assets need different cameras.
 
-- Add a planner mode with a Fibonacci-sphere sampler enclosing the bounding box, plus close-up probes on high curvature, silhouette edges and user-tagged parts (a barrel, a face, wheel wells). Reuse `probeCells` / `selectViews`.
-- Depends on item 1 for weak or missing UVs and per-part atlasing.
-- Add material presets for hard-surface, metal, fabric and organic in `material-presets.ts`. POM relief and edge wear remain available for close-ups.
-
-**Done when:** a prop GLB with no level context textures with full-surface coverage and no hole pass needed.
+- **Enclosing sphere + feature & pocket probes (`src/core/object-plan.ts`).** Places an enclosing Fibonacci-sphere camera shell plus a closer oblique turntable ring (`fibonacciSphereViews`), adds unobstructed close-up probes on high convex curvature (`faceCurvature`), exposed silhouette ridges and user-tagged parts (`objectFeatureViews`, `--focus barrel,face,wheel` / `focusParts`), and runs a pocket-refinement round over remaining uncovered UV patches through `probeCells` + weighted `selectViews`.
+- **Automatic detection & visibility layouts (`Session.load`, `objectEyes`).** `--mode auto` switches to `object` automatically when a mesh has no walkable floor or is under 4.5 m across, using `objectEyes` for `seen` / `near` UV layouts and `measure.mjs` so buried internal geometry yields texels to the visible shell, and switching `models.ts` prompts to clean discrete-object silhouette wording.
+- **Material presets (`src/core/material-presets.ts`, `aligned-maps.ts`, `viewer.ts`, `export.ts`).** Added `hard-surface`, `metal` (writing glTF ORM metallic B and enabling metallic response in `Viewer` and GLB export), `fabric` and `organic`, wired into `suggestPresetsFromWeights` and the CLI/MCP schema.
+- **Verified end to end:** an un-UV'd 8-part rover/weapon/character prop GLB unwraps via xatlas (48 charts), maps parts to `hard-surface`, `metal`, `organic` and `fabric`, and reaches **97.5% visible-surface paint coverage (312 px/m)** in 20 views with `holes = 0`.
 
 ## 6. Player-path importance map (navmesh + bots)
 

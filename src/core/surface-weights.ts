@@ -337,8 +337,8 @@ export const CLASS_PROFILES: Record<FaceClass, { roughness: [number, number]; pr
   wall: { roughness: [0.75, 0.95], preset: 'limestone', repair: 'continue' },
   ceiling: { roughness: [0.82, 0.96], repair: 'continue' },
   roof: { roughness: [0.65, 0.9], repair: 'continue' },
-  organic: { roughness: [0.7, 0.95], preset: 'limestone', repair: 'part' },
-  'hard-surface': { roughness: [0.35, 0.68], preset: 'painted-metal', repair: 'part' },
+  organic: { roughness: [0.65, 0.92], preset: 'organic', repair: 'part' },
+  'hard-surface': { roughness: [0.35, 0.68], preset: 'hard-surface', repair: 'part' },
 };
 
 const ORGANIC_RE = /\b(statues?|coloss\w*|kings?|sphinx\w*|trees?|plants?|bush\w*|foliage|shrubs?|vines?|ivy|moss|rocks?|boulders?|cliff|cloth|tarp\w*|canop\w*|curtains?|drapes?|cushions?|fabric|organic|charact\w*|figure|person|animal)\b/i;
@@ -623,10 +623,18 @@ export function suggestPresetsFromWeights(labels: string[], labelAttr: ArrayLike
     let dom = 0;
     for (let c = 1; c < FACE_CLASSES.length; c++) if (counts[k][c] > counts[k][dom]) dom = c;
     const cls = FACE_CLASSES[dom];
-    if (cls === 'hard-surface' && /\b(metal|steel|iron|robot|machine|crane|gantry|pipe|bollard|locker|cabinet|console|frame|grille|rail|beam|truss|shutter)\b/i.test(label)) {
+    if (/\b(cloth|fabric|canvas|tarp\w*|curtains?|drapes?|cushions?|linen|wool|leather|strap)\b/i.test(label)) {
+      out[label] = 'fabric';
+    } else if (/\b(bare|polished|brushed|forged|stainless|chrome|brass|bronze|copper)\b.*\b(metal|steel|iron|blade|barrel|brass|bronze|copper)\b|\b(blade|chrome|brass|bronze)\b/i.test(label)) {
+      out[label] = 'metal';
+    } else if (cls === 'hard-surface' && /\b(metal|steel|iron|robot|machine|crane|gantry|pipe|bollard|locker|cabinet|console|frame|grille|rail|beam|truss|shutter)\b/i.test(label)) {
       out[label] = 'painted-metal';
     } else if ((cls === 'wall' || cls === 'organic') && /\b(stone|masonry|sandstone|ashlar|pylon|colonnade|arch|plaster|brick|concrete|statue|coloss\w*|sphinx\w*)\b/i.test(label)) {
       out[label] = 'limestone';
+    } else if (cls === 'organic' && /\b(skin|face|body|bark|leaf|leaves|foliage|plant|tree|moss|flesh|creature|organic)\b/i.test(label)) {
+      out[label] = 'organic';
+    } else if (cls === 'hard-surface' && /\b(polymer|plastic|armour|armor|visor|casing|housing|grip|stock|chassis|hull|wheel|tyre|tire)\b/i.test(label)) {
+      out[label] = 'hard-surface';
     }
   });
   return out;

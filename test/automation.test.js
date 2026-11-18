@@ -22,7 +22,7 @@ describe('automation boundaries',()=>{
     expect(()=>workflow.parse({steps:[{op:'bounds'}],falKey:'secret'})).toThrow();
     for(const p of ['../file','/tmp/file','foo/../file','C:\\file','a//b'])expect(relativePath.safeParse(p).success).toBe(false);
     expect(()=>workflow.parse({steps:[{op:'load',path:'samples/luxor.glb',options:{layout:'near',cavity:1}}]})).toThrow();
-    expect(workflow.parse({steps:[{op:'load',path:'samples/luxor.glb',options:{layout:'near',cavity:0.7,weights:true}},{op:'weights',overlay:'curvature'},{op:'plan',options:{maxViews:24,adaptive:true,objective:'fisher',geodesic:true}},{op:'snapshot',camera:{position:[0,2,5],target:[0,1,0],weights:'class'}}]}).steps.length).toBe(4);
+    expect(workflow.parse({steps:[{op:'load',path:'samples/luxor.glb',options:{layout:'near',cavity:0.7,weights:true,mode:'object'}},{op:'weights',overlay:'curvature'},{op:'plan',options:{maxViews:24,adaptive:true,objective:'fisher',geodesic:true,mode:'object',focusParts:['barrel','face']}},{op:'materialPresets',assignments:{hull:'hard-surface',barrel:'metal',tarp:'fabric',head:'organic'}},{op:'snapshot',camera:{position:[0,2,5],target:[0,1,0],weights:'class'}}]}).steps.length).toBe(5);
     expect(jsonSchema(workflow).properties.steps.items.oneOf.length).toBeGreaterThan(30);
   });
   it('requires explicit paid opt-in before any worker starts',()=>{

@@ -46,6 +46,8 @@ export interface Level {
   surfaceWeights?: SurfaceWeights;
   /** Summary of geometry prepass weights when enabled on load (`weights: true`). */
   weights?: SurfaceWeightsSummary;
+  /** Whether the mesh is planned as a walkable architectural 'level' (default) or a standalone discrete 'object' (core/object-plan.ts). */
+  mode?: 'level' | 'object';
 }
 
 export interface LevelUnwrap {

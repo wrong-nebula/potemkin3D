@@ -16,6 +16,7 @@ const { values: a } = parseArgs({
     layout: { type: 'string' },
     cavity: { type: 'string' },
     weights: { type: 'boolean', default: false },
+    mode: { type: 'string' },
     unwrap: { type: 'string' },
     'min-cos': { type: 'string' },     // replay with another grazing-angle cut-off
     'edge-guard': { type: 'string' }, 'frame-margin': { type: 'string' },  // replay with another guard round nearer outlines (px at 1024 px views)   // 'file', 'seen' or 'near'; the run's own when not given
@@ -34,13 +35,14 @@ a['view-size'] ??= String(saved.viewSize ?? 1024);
 const layout = a.layout ?? saved.layout?.kind ?? 'file';
 const cavity = layout === 'file' ? 0 : +(a.cavity ?? (a.layout ? 0 : saved.layout?.cavity ?? 0));
 const weights = a.weights || (!a.layout && !!(saved.layout?.weights ?? saved.weights));
+const mode = a.mode ?? saved.mode ?? 'auto';
 const unwrap = a.unwrap ?? (saved.unwrap?.reason === 'asked' ? 'always' : 'auto');
 const { server, url } = await startServer();
 const browser = await launchBrowser();
 try {
   const page = await openApp(browser, url, { onLog: () => {}, onEvent: () => {} });
-  await page.evaluate(([lvl, l, atlas, viewSize, layout, area, pages, unwrap, cavity, weights]) => window.trompe.load(`/${lvl}`, { lighting: l, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity, weights }),
-    [a.level, lighting, a.atlas, a['view-size'], layout, saved.area, pages, unwrap, cavity, weights]);
+  await page.evaluate(([lvl, l, atlas, viewSize, layout, area, pages, unwrap, cavity, weights, mode]) => window.trompe.load(`/${lvl}`, { lighting: l, atlasSize: +atlas, viewSize: +viewSize, layout, area, pages, unwrap, cavity, weights, mode }),
+    [a.level, lighting, a.atlas, a['view-size'], layout, saved.area, pages, unwrap, cavity, weights, mode]);
   if (a['min-cos'] || a['edge-guard'] || a['frame-margin']) await page.evaluate((o) => window.trompe.projection(o), { ...(a['min-cos'] ? { minCos: +a['min-cos'] } : {}), ...(a['edge-guard'] ? { edgeGuard: +a['edge-guard'] } : {}), ...(a['frame-margin'] ? { frameMargin: +a['frame-margin'] } : {}) });
   await page.evaluate((r) => window.trompe.loadRun(r), a.run);
   const m = await page.evaluate(() => window.trompe.measure());
