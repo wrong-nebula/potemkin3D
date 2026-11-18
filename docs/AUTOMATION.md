@@ -58,7 +58,7 @@ A workflow has `version:1`, `steps` (1–100), `allowPaid:false` by default, and
 | `bounds`, `weights`, `paths`, `plan`, `quote`, `projection` | Inspect geometry, surface weights, player-path bot gaze ranks, choose cameras, estimate model cost, control projection thresholds. `quote` requires a plan. |
 | `run`, `topUp` | Paint a new run or continue one; `saveAs` is required. |
 | `parts`, `ground`, `repair`, `groundNotes`, `props` | Target parts, floor tiles, regions, pinned notes or individual props. |
-| `finish`, `save`, `export` | Fill unpainted slivers, persist a generation record, export the current GLB. `save` needs a real run; `export` also works after a clay self-test. |
+| `consolidate`, `uvRefine`, `finish`, `save`, `export` | Stitch view seams, run position/normal-conditioned UV inpainting & delighting, fill unpainted slivers, persist a generation record, export the current GLB. `save` needs a real run; `export` also works after a clay self-test. |
 | `ao`, `pbr`, `nameParts` | Bake AO, generate PBR maps, or name shapes. |
 | `materialPresets`, `materialMaps`, `floorDetail`, `floorDetailEnabled` | Assign presets, import aligned material maps and manage protected floor detail. `floorDetail.options:null` removes the detail layer. |
 | `walk`, `pick`, `snapshot` | Position a walking camera, ray-pick a surface point, or capture a specified camera. `walk.options:null` stops walking. |

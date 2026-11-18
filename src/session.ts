@@ -16,6 +16,7 @@ import { cutIslands, islandLimit, layoutHash, nearScaled, pagedLayout, seenCells
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { fillColours } from './core/finish';
 import { consolidateViews, type ConsolidateOptions } from './core/consolidate';
+import { refineUvAtlas, type UvRefineOptions } from './core/uv-refine';
 import { matchCorners, partMesh, pickParts, toGlb, type PartMesh, type PartStats } from './core/partpass';
 import { routeEdit, routeRetexture, mergeProviderOptions, type ProviderOptions } from './providers/router';
 import { PAINTED, PART_QUALITY } from './core/atlas';
@@ -660,6 +661,14 @@ export class Session {
     for (const p of r.partPass ?? []) {
       const buf = this.partFiles.get(p.name), label = this.level.labels.indexOf(p.name);
       if (buf && label >= 0) await this.applyPart(label, buf, p.still ? 'auto' : 'gaps');
+    }
+    if (r.uvRefined) {
+      await refineUvAtlas(this.engine, {
+        size: r.uvRefined.size,
+        delight: r.uvRefined.delight,
+        sharpen: r.uvRefined.sharpen,
+        importanceGate: r.uvRefined.importanceGate,
+      });
     }
     if (r.finished) this.finish();
   }
@@ -1311,6 +1320,44 @@ export class Session {
   }
 
   /**
+   * Paint3D-style UV-space coarse-to-fine refinement (core/uv-refine.ts): position/normal-conditioned 3D-seam-aware
+   * UV inpainting (driving unpainted share to ~0 without `finish.ts`) followed by intrinsic directional delighting and
+   * importance-gated HD detail sharpening.
+   */
+  async uvRefine(opts: UvRefineOptions = {}) {
+    const e = this.engine, r = this.record;
+    if (!e || !r) throw new Error('paint or load a run first');
+    this.abort = new AbortController();
+    e.replay(r.views);
+    if (r.consolidated) consolidateViews(e, r.views, { size: r.consolidated.size, flow: r.consolidated.flow, lambda: r.consolidated.lambda });
+    this.layGround();
+    this.paintGroundNotes();
+    for (const p of r.partPass ?? []) {
+      const buf = this.partFiles.get(p.name), label = this.level!.labels.indexOf(p.name);
+      if (buf && label >= 0) await this.applyPart(label, buf, p.still ? 'auto' : 'gaps');
+    }
+    const res = await refineUvAtlas(e, {
+      style: r.options.style,
+      provider: this.runProvider(),
+      ...opts,
+    }, this.abort.signal);
+    r.cost += res.cost;
+    r.uvRefined = {
+      size: res.size,
+      delight: opts.delight ?? 0.85,
+      sharpen: opts.sharpen ?? 0.45,
+      importanceGate: opts.importanceGate ?? 0.35,
+      unpaintedBefore: res.unpaintedBefore,
+      unpaintedAfter: res.unpaintedAfter,
+      bakedShadingBefore: res.bakedShadingBefore,
+      bakedShadingAfter: res.bakedShadingAfter,
+    };
+    if (r.finished) this.finish();
+    this.viewer?.setMode('textured');
+    return res;
+  }
+
+  /**
    * The finishing fill (core/finish.ts): give what no view painted its own part's colours, so nothing a player sees
    * is left as bare clay. Filled texels remain targets for any later view. No model call.
    */
@@ -1352,6 +1399,7 @@ export class Session {
       ...(partial ? { partial: true } : {}), ...(r.pbr ? { pbr: r.pbr } : {}),
       ...(this.level?.shapes ? { parts: [...this.level.labels] } : {}),
       ...(r.consolidated ? { consolidated: r.consolidated } : {}),
+      ...(r.uvRefined ? { uvRefined: r.uvRefined } : {}),
       ...(r.finished ? { finished: true } : {}),
       ...(r.ground ? { ground: r.ground } : {}),
       ...(r.groundNotes?.length ? { groundNotes: r.groundNotes } : {}),
@@ -1478,6 +1526,15 @@ export class Session {
       if (!res?.ok) continue;
       await this.applyPart(label, await res.arrayBuffer(), p.still ? 'auto' : 'gaps');
       (this.record.partPass ??= []).push(p);
+    }
+    if (meta.uvRefined) {
+      this.record.uvRefined = meta.uvRefined;
+      await refineUvAtlas(this.engine, {
+        size: meta.uvRefined.size,
+        delight: meta.uvRefined.delight,
+        sharpen: meta.uvRefined.sharpen,
+        importanceGate: meta.uvRefined.importanceGate,
+      });
     }
     if (meta.finished) this.finish();
     this.viewer.sky.reset();

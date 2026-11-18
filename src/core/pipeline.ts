@@ -201,6 +201,9 @@ export interface RunRecord {
   groundNotes?: { text: string; spec: ViewSpec; file: string; price: number }[];
   /** Texture-space multi-view seam consolidation applied after view projection (core/consolidate.ts). */
   consolidated?: { size: number; flow?: boolean; lambda?: number; before: import('./consolidate').SeamScore; after: import('./consolidate').SeamScore };
+  /** Paint3D-style UV-space inpainting + intrinsic delighting & importance-gated sharpening (core/uv-refine.ts). */
+  uvRefined?: { size: number; delight?: number; sharpen?: number; importanceGate?: number; unpaintedBefore: number; unpaintedAfter: number;
+    bakedShadingBefore: import('./uv-refine').BakedShadingScore; bakedShadingAfter: import('./uv-refine').BakedShadingScore };
   /** Normal and roughness maps made for this run's texture (core/pbr.ts). */
   pbr?: import('./pbr').PbrMetadata;
 }

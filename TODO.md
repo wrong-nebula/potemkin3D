@@ -40,15 +40,15 @@ Paper references in the source notes have not been checked yet (in particular "L
   - Optionally use MRF face-to-view assignment instead of per-texel max quality.
 - **Still open — learned back-projection (Im2SurfTex-style).** Replace hard per-texel projection with a small module that attends over nearby projected pixels (depth, normal and confidence-weighted) before writing to the atlas, trained on multi-view outputs in `runs/` against the Screened-Poisson baseline above.
 
-## 4. UV-space refinement (Paint3D-style coarse-to-fine)
+## 4. ~~UV-space refinement (Paint3D-style coarse-to-fine)~~ (done: `src/core/uv-refine.ts`, `--uv-refine`, MCP `uvRefine`)
 
 **Why:** the projected atlas is a good coarse texture with holes, baked-in light and soft patches. The finishing fill (`finish.ts`) and the hole pass only partly fix that.
 
-- After projection, run a UV-space inpainting model on the atlas to fill unpainted texels. Condition it on the position/normal atlases so it knows what is next to what across seams.
-- Then run a high-definition UV pass that removes residual baked lighting and sharpens detail. The texture stays lighting-free and relights cleanly. Gate it by importance (items 6 and 7) so it only spends where players look.
-- It works the same for levels and objects. It needs a UV-space model, local (item 2) or hosted.
-
-**Done when:** the unpainted share after views drops to ~0 without the finishing fill, and relit stills show less baked shading than the current output on the same run.
+- **Position/normal-conditioned 3D-seam-aware UV inpainting (`buildUvSeamGraph`, `uvInpaint`, `Atlas.applyUvRefinement`).** Bridges disjoint UV chart perimeter texels that meet in 3D world space across cuts (`~10k` cross-seam links on Courtyard/Hall), relaxes harmonic albedo weighted by 3D distance and normal agreement, transfers world-anchored exemplar micro-grain per `(part, normal-octant)`, and optionally runs UV-tile model inpainting via item 2's `routeEdit` (`local` or `fal`) gated by importance.
+- **Importance-gated intrinsic delighting & HD sharpening (`bakedShadingScore`, `uvDelightAndSharpen`).** Regresses per-part low-frequency log-luminance against the 3D normal/position directional sun + sky irradiance basis to strip baked lighting while preserving intrinsic grain, and applies bilateral normal-preserving sharpening gated by combined surface & player-path importance (items 6 & 7). Works identically for `--mode level` and `--mode object`.
+- **Measured (`--layout near --weights --paths`, 1.9 s, without `finish.ts`):**
+  - **Courtyard** (`9,956` 3D seam links): unpainted share drops **46.0% → 0.00%** (`atlas.coverage()` **53.8% → 99.99%**), baked shading correlation drops **0.644 → 0.035 (-95%)** and sunlit-vs-shaded spread drops **0.400 → 0.017 (-96%)**.
+  - **Hall** (`10,065` 3D seam links): unpainted share drops **37.1% → 0.00%** (`atlas.coverage()` **62.2% → 99.99%**), baked shading correlation drops **0.430 → 0.040 (-91%)**, directional spread drops **0.391 → 0.028 (-93%)**, and opposing-sun relit still asymmetry drops **27.7 → 20.0 RGB (-28%)**.
 
 ## 5. ~~Object mode (props, weapons, characters, vehicles)~~ (done: `src/core/object-plan.ts`, `--mode auto|level|object`, `--focus`, object presets)
 

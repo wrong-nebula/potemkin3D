@@ -26,6 +26,7 @@ import { MATERIAL_PRESETS, type MaterialAssignments } from './core/material-pres
 import type { AlignedMapSource } from './core/aligned-maps';
 import { validateViews } from './core/validation-engine';
 import type { ConsolidateOptions } from './core/consolidate';
+import type { UvRefineOptions } from './core/uv-refine';
 import type { WeightOverlay } from './core/viewer';
 
 /**
@@ -190,6 +191,10 @@ export function makeApi(session: Session) {
     /** Texture-space multi-view seam consolidation (tangent-flow registration + Screened-Poisson stitch; core/consolidate.ts). No model call. */
     consolidate(opts: ConsolidateOptions = {}) {
       return session.consolidate(opts);
+    },
+    /** Paint3D-style UV-space inpainting + intrinsic delighting & importance-gated sharpening (core/uv-refine.ts). */
+    uvRefine(opts: UvRefineOptions = {}) {
+      return session.uvRefine(opts);
     },
     /** The finishing fill: what no view painted takes its part's colours (core/finish.ts). No model call. */
     finish() {

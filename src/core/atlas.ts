@@ -205,6 +205,32 @@ void main() {
   outColor = vec4(mix(corrected, u.rgb, seam), c.a);
 }`;
 
+/** Paint3D-style UV refinement writeback: fills unpainted island texels at `quality` (> PAINTED) from `inpaint` and applies signed delighting/sharpening `delta` onto already-painted texels without losing native 4K/8K detail. */
+const UV_REFINE_FRAG = /* glsl */ `
+uniform sampler2D src;
+uniform sampler2D islands;
+uniform sampler2D inpaint;
+uniform sampler2D delta;
+uniform float quality;
+uniform vec3 page;
+layout(location = 0) out vec4 outColor;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(src, p, 0);
+  outColor = c;
+  vec2 uv = (page.xy + gl_FragCoord.xy / vec2(textureSize(src, 0))) / page.z;
+  if (c.a <= 0.0003) {
+    if (texelFetch(islands, p, 0).r < 0.5) return;
+    vec4 f = texture(inpaint, uv);
+    if (f.a > 0.5) outColor = vec4(f.rgb / f.a, quality);
+    return;
+  }
+  vec4 d = texture(delta, uv);
+  if (d.a < 0.5) return;
+  vec3 off = (d.rgb - vec3(128.0 / 255.0)) * (255.0 / 127.0);
+  outColor = vec4(clamp(c.rgb + off, 0.0, 1.0), c.a);
+}`;
+
 /** A part's own texture drawn into the level's layout: each corner carries where it is in both. */
 const PART_VERT = /* glsl */ `
 uniform vec3 page;
@@ -344,6 +370,8 @@ void main() {
 
 /** The capture quality a part textured on its own is stored at: painted, but a view that sees it well still wins. */
 export const PART_QUALITY = 0.02;
+/** Capture quality for position/normal-conditioned UV-space inpainting (core/uv-refine.ts): counts as painted (`> PAINTED`), while closer camera views still win. */
+export const UV_REFINE_QUALITY = 0.015;
 
 /**
  * The capture quality the finishing fill is stored at, and the quality from which a texel counts as painted by a
@@ -638,6 +666,35 @@ export class Atlas {
     });
     mat.dispose();
     paintTex.dispose();
+    deltaTex.dispose();
+    this.revision++;
+  }
+
+  /** Apply UV-space inpainting to unpainted island texels (at `quality > PAINTED`, driving unpainted share to ~0 without `finish.ts`) and signed delighting/sharpening deltas to painted texels. */
+  applyUvRefinement(inpaintRgba: Uint8ClampedArray, deltaRgba: Uint8ClampedArray, n: number, quality = UV_REFINE_QUALITY) {
+    const inpaintCopy = new Uint8ClampedArray(inpaintRgba);
+    for (let i = 0; i < inpaintCopy.length; i += 4) if (!inpaintCopy[i + 3]) inpaintCopy[i] = inpaintCopy[i + 1] = inpaintCopy[i + 2] = 0;
+    const inpaintTex = new THREE.DataTexture(inpaintCopy, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+    inpaintTex.minFilter = inpaintTex.magFilter = THREE.LinearFilter;
+    inpaintTex.premultiplyAlpha = false;
+    inpaintTex.needsUpdate = true;
+    const deltaTex = new THREE.DataTexture(deltaRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+    deltaTex.minFilter = deltaTex.magFilter = THREE.LinearFilter;
+    deltaTex.premultiplyAlpha = false;
+    deltaTex.needsUpdate = true;
+    const mat = passMaterial(UV_REFINE_FRAG, {
+      src: { value: null }, islands: { value: null }, inpaint: { value: inpaintTex }, delta: { value: deltaTex },
+      quality: { value: quality }, page: this.pageU,
+    });
+    this.eachPage((page, k) => {
+      mat.uniforms.src.value = page.a.texture;
+      mat.uniforms.islands.value = page.islands.texture;
+      this.gpu.pass(mat, this.b);
+      this.swap(page);
+      this.padPage(page, k);
+    });
+    mat.dispose();
+    inpaintTex.dispose();
     deltaTex.dispose();
     this.revision++;
   }

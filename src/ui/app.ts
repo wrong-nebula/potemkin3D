@@ -180,6 +180,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
   const glbBtn = h('button', {}, 'Download .glb');
   const texDl = h('button', {}, 'Download texture');
   const consolidateBtn = h('button', {}, 'Consolidate view seams · free');
+  const uvRefineBtn = h('button', {}, 'UV-space refine & delight · free');
   const mapsDl = h('button', {}, 'Download material maps');
   mapsDl.style.display = 'none';
   const key = h('input', { type: 'password', placeholder: 'fal key (optional)' });
@@ -209,7 +210,7 @@ export function mountUi(session: Session, panel: HTMLElement) {
       h('div', { class: 'row' }, h('span', { class: 'lab' }, 'Relief'), relief), floorDetailControls, aoBtn,
       h('div', { class: 'note' }, `${MATERIAL_MODEL.label} predicts height and roughness together. Normals come from that height; presets set each surface's response. Original paint stays intact. Baked normal and roughness maps are exported with the .glb.`)),
     h('section', {}, h('label', {}, 'Display'), segMode, weightsSel, h('label', { class: 'row note' }, camsBox, 'Show cameras'), walkBtn),
-    h('section', {}, h('label', {}, 'Export'), consolidateBtn, h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
+    h('section', {}, h('label', {}, 'Export'), consolidateBtn, uvRefineBtn, h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
     h('section', {}, h('label', {}, 'Providers'), providerSel, localUrlInput, key,
       h('div', { class: 'note' }, 'Local routes to ComfyUI (:8188), diffusers (:8000) or Hunyuan3D-Paint (:8081) at $0. For cloud, empty key uses FAL_KEY from the dev server.')),
     log,
@@ -581,6 +582,20 @@ export function mountUi(session: Session, panel: HTMLElement) {
       say(String((e as Error)?.message ?? e));
     } finally {
       consolidateBtn.disabled = false;
+      syncPbr();
+    }
+  };
+  uvRefineBtn.onclick = async () => {
+    if (!session.record) { say('paint or load a run first'); return; }
+    uvRefineBtn.disabled = true;
+    try {
+      const r = await session.uvRefine();
+      say(`UV refine (${r.seconds}s, ${r.crossSeamLinks} 3D seam links): unpainted ${(100 * r.unpaintedBefore).toFixed(1)}% → ${(100 * r.unpaintedAfter).toFixed(1)}%, baked shading r=${r.bakedShadingBefore.correlation.toFixed(2)} → ${r.bakedShadingAfter.correlation.toFixed(2)}`);
+      if (savedAs) { await session.saveRun(savedAs); say(`saved with runs/${savedAs}/`); }
+    } catch (e) {
+      say(String((e as Error)?.message ?? e));
+    } finally {
+      uvRefineBtn.disabled = false;
       syncPbr();
     }
   };

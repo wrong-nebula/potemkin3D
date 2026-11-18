@@ -14,6 +14,7 @@
 //     [--provider fal|local|auto] [--provider-fallback none|fal|local] [--local-backend auto|comfyui|diffusers|hunyuan3d|procedural]
 //                    [--local-url http://127.0.0.1:8188] [--local-model ...]   route image edits locally ($0 paint, no FAL_KEY needed)
 //     [--consolidate] confidence-weighted tangent-flow + Screened-Poisson atlas stitch to remove --parallel view seams (free)
+//     [--uv-refine]  Paint3D-style position/normal-conditioned UV inpainting + intrinsic delighting & importance-gated sharpening
 //     [--layout seen] lay the texture out again so the faces players can see get the texels (the exported GLB carries the new UVs)
 //     [--full]       a clean-up pass, hard parts textured on their own, and the finishing fill (add --floors 12 for plain ground
 //                    such as concrete: on patterned ground the floor pass still drifts in scale from view to view)
@@ -61,6 +62,7 @@ const { values: a } = parseArgs({
     cleanup: { type: 'string', default: '0' },
     parts: { type: 'string', default: '0' },       // max parts to texture on their own where the painting left them unfinished ($0.30 each)
     consolidate: { type: 'boolean', default: false }, // confidence-weighted tangent-flow + Screened-Poisson atlas stitch after views (no model call)
+    'uv-refine': { type: 'boolean', default: false }, // Paint3D-style position/normal-conditioned UV inpainting + intrinsic delighting & importance-gated sharpening
     finish: { type: 'boolean', default: false },
     diffuse: { type: 'boolean', default: false },
     notes: { type: 'string' },     // a JSON file of things to add at spots in the level: [{ text: 'add a poster here', at: [x, y, z], size: 1.2 }] in JSON (models that read notes only: h3)
@@ -270,8 +272,9 @@ try {
     if (+a.ground > 0) log(`ground: ${JSON.stringify(await page.evaluate(([o, runId]) => window.trompe.ground(o, undefined, runId), [{ tiles: +a.ground, ...(a['ground-span'] ? { span: +a['ground-span'] } : {}) }, id]))}`);
     if (+a.props > 0) log(`prop pass: ${JSON.stringify(await page.evaluate(([max, runId]) => window.trompe.props({ max }, undefined, runId), [+a.props, id]))}`);
     if (+a.parts > 0) log(`part pass: ${JSON.stringify(await page.evaluate(([max, runId]) => window.trompe.parts({ max }, undefined, runId), [+a.parts, id]))}`);
+    if (a['uv-refine']) log(`uv-refine: ${JSON.stringify(await page.evaluate(() => window.trompe.uvRefine()))}`);
     if (a.finish) log(`finishing fill: ${JSON.stringify(await page.evaluate(() => window.trompe.finish()))}`);
-    if (a.consolidate || a.ao || a.pbr || a.finish || +a.parts > 0 || +a.ground > 0 || +a.props > 0) await page.evaluate((runId) => window.trompe.save(runId), id);
+    if (a.consolidate || a['uv-refine'] || a.ao || a.pbr || a.finish || +a.parts > 0 || +a.ground > 0 || +a.props > 0) await page.evaluate((runId) => window.trompe.save(runId), id);
     log(`saved to runs/${id}/`);
   }
 } catch (e) {

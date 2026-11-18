@@ -77,6 +77,7 @@ export const steps = [
     mode: z.enum(['sheet','sequence']), model: text, split: z.boolean(), cels: z.array(text), dry: z.boolean(),
     cameras: z.record(z.string(), z.array(object({ position: vector, target: vector, fov: number.optional() }))) })).optional() }),
   step('consolidate', { options: object(optional({ size, depthSize: size, flow: z.boolean(), maxShift: number.min(0).max(16), lambda: number.min(0).max(1) })).optional() }),
+  step('uvRefine', { options: object(optional({ size, delight: fraction, sharpen: number.min(0).max(2), importanceGate: number.min(0).max(2), modelTiles: count, model: text, style: text })).optional() }),
   step('finish'), step('save', { id }),
   step('ao', { options: object(optional({ size, rays: z.number().int().min(1).max(256), radius: positive })).optional() }),
   step('pbr', { options: object(optional({ size, seed: z.number().int(), strength: number.min(0), baseRoughness: fraction,
@@ -125,7 +126,7 @@ export function paidSteps(input) {
       if (!strictLocal) out.push(s.op);
     } else if (s.op === 'pbr' || (s.op === 'checkRun' && s.planes)) {
       out.push(s.op);
-    } else if ((s.op === 'ground' && !s.options?.reuse) || (s.op === 'props' && !s.options?.dry) || (s.op === 'repair' && !s.dry)) {
+    } else if ((s.op === 'ground' && !s.options?.reuse) || (s.op === 'props' && !s.options?.dry) || (s.op === 'repair' && !s.dry) || (s.op === 'uvRefine' && (s.options?.modelTiles ?? 0) > 0)) {
       if (!strictLocal) out.push(s.op);
     }
   }

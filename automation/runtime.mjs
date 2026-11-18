@@ -100,7 +100,7 @@ export async function executeJob(kind,input,ctx) {
       else if(step.op==='repair')args=[step.regions,undefined,step.saveAs,step.dry??false];
       else if(step.op==='groundNotes')args=[step.notes,undefined,step.saveAs];
       else if(step.op==='nameParts')args=[step.style??defaults.style];
-      else if(['provider','plan','quote','projection','consolidate','ao','pbr','materialMaps','pick','promptTest'].includes(step.op))args=[step.options??{}];
+      else if(['provider','plan','quote','projection','consolidate','uvRefine','ao','pbr','materialMaps','pick','promptTest'].includes(step.op))args=[step.options??{}];
       else if(step.op==='walk')args=[step.options===null?null:step.options??{}];
       else if(step.op==='floorDetail')args=[step.options??undefined];
       else if(step.op==='materialPresets')args=[step.assignments];
