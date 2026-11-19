@@ -2,24 +2,48 @@
 <html lang="en" data-run="loft-props">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Potemkin 3D</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Potemkin 3D New York loft real-time WebGL walkthrough with auto-exposure, lens optics, depth of field and surface reflections." />
+    <title>New York loft · Potemkin 3D</title>
     <link rel="icon" href="data:," />
     <style>
-      html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; }
-      canvas { display: block; width: 100vw; height: 100vh; }
+      :root { color-scheme: dark; --z-canvas: 0; --z-hud: 10; }
+      html, body { margin: 0; width: 100%; height: 100dvh; background: #0b0b0c; overflow: hidden; }
+      main { width: 100%; height: 100dvh; }
+      canvas { display: block; width: 100vw; height: 100dvh; }
       #hud {
-        position: fixed; left: 16px; bottom: 14px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-        color: rgba(255, 255, 255, 0.78); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); user-select: none; white-space: pre;
+        position: fixed;
+        left: max(16px, env(safe-area-inset-left));
+        bottom: max(16px, env(safe-area-inset-bottom));
+        z-index: var(--z-hud);
+        max-width: calc(100vw - 112px);
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(205, 201, 189, 0.16);
+        background: rgba(11, 11, 12, 0.74);
+        font: 12px/1.58 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-variant-numeric: tabular-nums;
+        color: #f0eee5;
+        user-select: none;
+        white-space: pre;
+        overflow-x: auto;
       }
-      #hud b { color: #fff; font-weight: 600; }
-      #hud .off { color: rgba(255, 255, 255, 0.35); }
-      #msg { position: fixed; inset: 0; display: grid; place-items: center; color: rgba(255, 255, 255, 0.7); font: 14px ui-sans-serif, system-ui, sans-serif; }
+      #hud b { color: #ffffff; font-weight: 600; }
+      #hud .off { color: #a9a598; }
+      #msg {
+        position: fixed; inset: 0; display: grid; place-items: center;
+        color: #cdc9bd; font: 400 15px/1.4 ui-sans-serif, system-ui, sans-serif; text-wrap: pretty;
+      }
+      @media (max-width: 640px) {
+        #hud { font-size: 11px; max-height: 34dvh; overflow-y: auto; }
+      }
     </style>
   </head>
   <body>
-    <canvas id="view"></canvas>
-    <div id="msg">loading the loft…</div>
+    <main>
+      <canvas id="view" role="img" aria-label="New York loft 3D walkthrough"></canvas>
+    </main>
+    <div id="msg" role="status" aria-live="polite">Loading the loft…</div>
     <div id="hud" hidden></div>
     <script type="module" src="/src/demo/loftwalk.js"></script>
   </body>

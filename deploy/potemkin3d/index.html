@@ -2,10 +2,11 @@
 <html lang="en" data-run="scene" data-base="./runs/">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Potemkin 3D</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Potemkin 3D New York loft real-time WebGL walkthrough with auto-exposure, lens optics, depth of field and surface reflections." />
+    <title>New York loft · Potemkin 3D</title>
     <link rel="icon" href="data:," />
-    <style>html,body{background:#0b0b0c;height:100%;margin:0;overflow:hidden}canvas{width:100vw;height:100vh;display:block}#hud{color:#ffffffc7;text-shadow:0 1px 2px #000c;-webkit-user-select:none;user-select:none;white-space:pre;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;position:fixed;bottom:14px;left:16px}#hud b{color:#fff;font-weight:600}#hud .off{color:#ffffff59}#msg{color:#ffffffb3;place-items:center;font:14px ui-sans-serif,system-ui,sans-serif;display:grid;position:fixed;inset:0}</style>
+    <style>:root{color-scheme:dark;--z-canvas:0;--z-hud:10}html,body{background:#0b0b0c;width:100%;height:100dvh;margin:0;overflow:hidden}main{width:100%;height:100dvh}canvas{width:100vw;height:100dvh;display:block}#hud{color:#f0eee5;background:#0b0b0cbd;border:1px solid #cdc9bd29;border-radius:6px;padding:10px 12px;max-width:calc(100vw - 112px);overflow-x:auto;-webkit-user-select:none;user-select:none;white-space:pre;font:12px/1.58 ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;position:fixed;bottom:max(16px,env(safe-area-inset-bottom));left:max(16px,env(safe-area-inset-left));z-index:var(--z-hud)}#hud b{color:#fff;font-weight:600}#hud .off{color:#a9a598}#msg{color:#cdc9bd;place-items:center;font:400 15px/1.4 ui-sans-serif,system-ui,sans-serif;text-wrap:pretty;display:grid;position:fixed;inset:0}@media (max-width:640px){#hud{font-size:11px;max-height:34dvh;overflow-y:auto}}</style>
     <script type="module" crossorigin src="./assets/loft-walk-BOICk62V.js"></script>
 
 <!-- potemkin-shell:start -->
@@ -14,8 +15,8 @@
 <!-- potemkin-shell:end -->
 </head>
   <body>
-    <canvas id="view"></canvas>
-    <div id="msg">loading the loft…</div>
+    <main><canvas id="view" role="img" aria-label="New York loft 3D walkthrough"></canvas></main>
+    <div id="msg" role="status" aria-live="polite">Loading the loft…</div>
     <div id="hud" hidden></div>
   </body>
 </html>

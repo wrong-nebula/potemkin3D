@@ -1,40 +1,43 @@
-/* The scene menu of the Potemkin 3D site (menu.js), after the Sillage site's: large serif scene names on a dimmed,
-   blurred view of the scene behind, and a small "Menu" button in the corner the read-outs leave free. */
+/* The scene menu of the Potemkin 3D site (menu.js), after the Sillage site's: large serif scene names on a dimmed
+   view of the scene behind, and a "Menu" button in the corner the read-outs leave free. */
 @font-face { font-family: "Potemkin Serif"; font-style: normal; font-weight: 400 500; font-display: swap; src: url(/potemkin/CormorantGaramond-latin.woff2) format("woff2"); }
+:root { --z-hud: 10; --z-menu-trigger: 20; }
 .potemkin-menu, .potemkin-menu-trigger { color: #f0eee5; font-family: "Potemkin Serif", Georgia, serif; font-weight: 400; }
-.potemkin-menu { box-sizing: border-box; overscroll-behavior: contain; scrollbar-color: #b3b0a6 #17171a; color-scheme: dark; background: none; border: 0;
-  width: min(680px, 100vw - 48px); max-height: calc(100dvh - 48px); padding: 22px 28px; overflow: auto; }
-.potemkin-menu::backdrop { -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); background: #0b0b0cd6; }
+.potemkin-menu { box-sizing: border-box; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #b3b0a6 #17171a; color-scheme: dark; background: #121215f2;
+  border: 1px solid #dcd8c82e; border-radius: 12px; width: min(680px, 100vw - 48px); max-height: calc(100dvh - 48px); padding: 24px 28px; overflow: auto; }
+.potemkin-menu::backdrop { background: #0b0b0ce0; }
 .potemkin-menu * { box-sizing: border-box; }
 .potemkin-menu ::selection { color: #17171a; background: #ddd9c8; }
 .potemkin-menu-header { border-bottom: 1px solid #dcd8c838; display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 20px; padding-bottom: 20px; }
-.potemkin-menu h2 { letter-spacing: -0.015em; margin: 0; font: 400 clamp(1.5rem, 3.4vw, 2rem)/1.1 "Potemkin Serif", Georgia, serif; }
+.potemkin-menu h2 { margin: 0; font: 500 clamp(1.5rem, 3.4vw, 2rem)/1.1 "Potemkin Serif", Georgia, serif; text-wrap: balance; }
 .potemkin-menu-close { color: #cdc9bd; cursor: pointer; background: none; border: 0; flex-shrink: 0; display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 0 6px 12px;
-  font: 400 1.125rem/1.2 "Potemkin Serif", Georgia, serif; }
-.potemkin-menu-close kbd { font: inherit; color: #f0eee5; border: 1px solid #b3b0a666; border-radius: 4px; padding: 3px 6px; }
-.potemkin-menu nav { display: flex; flex-direction: column; gap: 3px; }
-.potemkin-menu nav a { color: #f0eee5; letter-spacing: -0.02em; display: flex; justify-content: space-between; align-items: baseline; gap: 20px; min-height: 56px; padding: 9px 0;
-  font-size: clamp(2rem, 5.3vw, 3.25rem); line-height: 1.15; text-decoration: none; }
+  font: 400 1.125rem/1.2 "Potemkin Serif", Georgia, serif; transition: color 150ms ease-out; }
+.potemkin-menu-close:hover { color: #f0eee5; }
+.potemkin-menu-close kbd { font: inherit; color: #f0eee5; border: 1px solid #b3b0a666; border-radius: 4px; padding: 3px 7px; }
+.potemkin-menu nav { display: flex; flex-direction: column; gap: 4px; }
+.potemkin-menu nav a { color: #f0eee5; display: flex; justify-content: space-between; align-items: baseline; gap: 20px; min-height: 56px; padding: 9px 0;
+  font-size: clamp(2rem, 5.3vw, 3.25rem); line-height: 1.15; text-decoration: none; text-wrap: balance; }
 .potemkin-menu a:hover > span:first-child, .potemkin-menu a[aria-current=page] > span:first-child { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.17em; }
-.potemkin-menu-current { color: #cdc9bd; letter-spacing: 0; white-space: nowrap; font-size: 1rem; }
-.potemkin-menu-footer { color: #cdc9bd; margin: 28px 0 0; font-size: 1.125rem; line-height: 1.5; }
-.potemkin-menu :focus-visible { outline: 2px solid #f2eedc; outline-offset: 6px; border-radius: 2px; }
+.potemkin-menu-current { color: #cdc9bd; white-space: nowrap; font-size: 1rem; }
+.potemkin-menu-footer { color: #cdc9bd; margin: 24px 0 0; font-size: 1.125rem; line-height: 1.5; text-wrap: pretty; }
+.potemkin-menu :focus-visible { outline: 2px solid #f2eedc; outline-offset: 4px; border-radius: 2px; }
 .potemkin-menu nav a:focus-visible { outline: none; border-radius: 0; }
 .potemkin-menu nav a:focus-visible > span:first-child { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.17em; }
-.potemkin-menu-trigger { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: max(18px, env(safe-area-inset-bottom)); z-index: 3; cursor: pointer;
-  background: #141416d9; border: 1px solid #cdc9bd3d; border-radius: 4px; min-width: 64px; min-height: 44px; padding: 8px 14px; font-size: 1.125rem; }
-.potemkin-menu-trigger:hover { background: #2a2a2e; border-color: #cdc9bd80; }
-.potemkin-menu-trigger:active { background: #38383d; }
+.potemkin-menu-trigger { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: max(18px, env(safe-area-inset-bottom)); z-index: var(--z-menu-trigger); cursor: pointer;
+  background: #141416e6; border: 1px solid #cdc9bd45; border-radius: 6px; min-width: 68px; min-height: 44px; padding: 8px 15px; font-size: 1.125rem;
+  transition: border-color 150ms ease-out; }
+.potemkin-menu-trigger:hover { background: #222227; border-color: #cdc9bd80; }
+.potemkin-menu-trigger:active { background: #2c2c33; }
 .potemkin-menu-trigger:focus-visible { outline: 2px solid #f2eedc; outline-offset: 4px; }
 @media (width <= 480px) {
-  .potemkin-menu { width: calc(100vw - 40px); padding: 14px 8px; }
+  .potemkin-menu { width: calc(100vw - 32px); padding: 18px 16px; }
   .potemkin-menu nav a { flex-wrap: wrap; gap: 2px 12px; }
   .potemkin-menu-current { font-size: 0.9375rem; }
   .potemkin-menu-header { gap: 12px; }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .potemkin-menu[open] .potemkin-menu-content { animation: 0.18s ease-out potemkin-menu-in; }
-  @keyframes potemkin-menu-in { 0% { opacity: 0.25; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+  .potemkin-menu[open] .potemkin-menu-content { animation: 0.16s ease-out potemkin-menu-in; }
+  @keyframes potemkin-menu-in { 0% { opacity: 0.3; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 }
 @media (forced-colors: active) {
   .potemkin-menu { color: canvastext; background: canvas; }

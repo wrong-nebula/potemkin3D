@@ -2,12 +2,36 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>trompe</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="Potemkin 3D studio: minimal multi-panel workspace for view-aware 3D camera planning, texture synthesis, Critic scoring, and PBR glTF export."
+    />
+    <link rel="icon" href="data:," />
+    <title>Potemkin 3D · Studio</title>
   </head>
   <body>
-    <canvas id="view"></canvas>
-    <aside id="panel"></aside>
+    <div id="studio-shell">
+      <header id="topbar" aria-label="Workspace toolbar"></header>
+      <ui-resizable id="workspace-split" aria-label="Workspace panels" auto-save-id="potemkin-workspace">
+        <ui-resizable-panel id="panel-left" default-size="188px" min-size="148px" max-size="320px" collapsible></ui-resizable-panel>
+        <ui-resizable-handle aria-label="Resize left dock"></ui-resizable-handle>
+        <ui-resizable-panel id="panel-center" min-size="30">
+          <ui-resizable id="center-split" orientation="vertical" aria-label="Viewport and monitor" auto-save-id="potemkin-center">
+            <ui-resizable-panel id="panel-stage" min-size="40">
+              <main id="stage">
+                <canvas id="view" role="img" aria-label="3D scene viewport"></canvas>
+                <div id="viewport-hud" aria-hidden="true"></div>
+              </main>
+            </ui-resizable-panel>
+            <ui-resizable-handle aria-label="Resize monitor dock"></ui-resizable-handle>
+            <ui-resizable-panel id="panel-bottom" default-size="144px" min-size="96px" max-size="300px" collapsible></ui-resizable-panel>
+          </ui-resizable>
+        </ui-resizable-panel>
+        <ui-resizable-handle aria-label="Resize inspector dock"></ui-resizable-handle>
+        <ui-resizable-panel id="panel-right" default-size="264px" min-size="220px" max-size="400px" collapsible></ui-resizable-panel>
+      </ui-resizable>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

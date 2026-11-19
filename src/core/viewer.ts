@@ -14,7 +14,8 @@ import { loadFloorDetail, installFloorDetail, type FloorDetail, type FloorDetail
 import { MATERIAL_PRESETS } from './material-presets';
 import { weightOverlayColors, type SurfaceWeights, type WeightOverlayKind } from './surface-weights';
 
-export const PINK = new THREE.Color('#F53CD1');
+export const ACCENT = new THREE.Color('#E5E5E5');
+export const PINK = ACCENT;
 
 /**
  * Display of the level: lit clay underneath, the painted texture on top (unpainted texels show the clay).

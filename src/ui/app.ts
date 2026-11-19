@@ -1,643 +1,1767 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
-import { MATERIAL_MODEL, MODELS } from '../providers/models';
-import { configureFal } from '../providers/fal';
-import { configureProvider, type ProviderKind } from '../providers/router';
+import '@ui-sdk/web/alert-dialog';
+import '@ui-sdk/web/button';
+import '@ui-sdk/web/checkbox';
+import '@ui-sdk/web/field';
+import '@ui-sdk/web/file-input';
+import '@ui-sdk/web/input';
+import '@ui-sdk/web/listbox';
+import '@ui-sdk/web/password-input';
+import '@ui-sdk/web/resizable';
+import '@ui-sdk/web/segmented-control';
+import '@ui-sdk/web/select';
+import '@ui-sdk/web/slider';
+import '@ui-sdk/web/tabs';
+import '@ui-sdk/web/textarea';
+import '@ui-sdk/web/toggle';
+import { createConfirm, type UiAlertDialogElement } from '@ui-sdk/web/alert-dialog';
+import type { UiButtonElement } from '@ui-sdk/web/button';
+import type { UiCheckboxElement } from '@ui-sdk/web/checkbox';
+import type { UiFileInputElement } from '@ui-sdk/web/file-input';
+import type { UiInputElement } from '@ui-sdk/web/input';
+import type { UiListboxElement } from '@ui-sdk/web/listbox';
+import type { UiPasswordInputElement } from '@ui-sdk/web/password-input';
+import type { UiResizableElement } from '@ui-sdk/web/resizable';
+import type { UiSegmentedControlElement } from '@ui-sdk/web/segmented-control';
+import type { UiSelectElement } from '@ui-sdk/web/select';
+import type { UiSliderElement } from '@ui-sdk/web/slider';
+import type { UiTabsElement } from '@ui-sdk/web/tabs';
+import type { UiTextareaElement } from '@ui-sdk/web/textarea';
+import type { UiToggleElement } from '@ui-sdk/web/toggle';
+import { setAgentConfirmHandler } from '../agent';
+import type { makeApi } from '../api';
+import type { CritiqueReport } from '../core/critic';
+import { MATERIAL_PRESETS, isMaterialPreset, suggestMaterialPreset, type MaterialAssignments } from '../core/material-presets';
 import { pbrQuote } from '../core/pbr';
 import { DEFAULT_PIPELINE, quote, type PipelineEvent, type PipelineOptions } from '../core/pipeline';
+import { configureFal } from '../providers/fal';
+import { MODELS } from '../providers/models';
+import { configureProvider, type LocalBackend, type ProviderKind } from '../providers/router';
+import { LIGHTING, type Session } from '../session';
 import hangar from '../../samples/hangar.look.json';
 import luxor from '../../samples/luxor.look.json';
 import tatooine from '../../samples/tatooine.look.json';
-import { LIGHTING, type Session } from '../session';
-import { MATERIAL_PRESETS, isMaterialPreset, suggestMaterialPreset, type MaterialAssignments } from '../core/material-presets';
 
-export interface Sample { name: string; url: string; lighting: 'outdoor' | 'overcast' | 'indoor' | 'indoor-soft'; style: string; roofStyle?: string; floorStyle?: string;
+export interface Sample {
+  name: string;
+  url: string;
+  lighting: 'outdoor' | 'overcast' | 'indoor' | 'indoor-soft';
+  style: string;
+  roofStyle?: string;
+  floorStyle?: string;
   preset?: 'sento-floor';
-  /** Where players can be (min x, y, z, max x, y, z), when the level has more floor than that. */
   area?: number[];
-  /** What a place of its own kind brings to a run: its wording, how prompts speak of it, photos of the real place (a look file). */
-  look?: Pick<PipelineOptions, 'wording' | 'setting' | 'styleImages' | 'styleMax'> }
+  look?: Pick<PipelineOptions, 'wording' | 'setting' | 'styleImages' | 'styleMax'>;
+}
+
+export interface StudioMounts {
+  topbar: HTMLElement;
+  leftDock: HTMLElement;
+  rightDock: HTMLElement;
+  bottomDock: HTMLElement;
+  viewportHud: HTMLElement;
+}
 
 export const SAMPLES: Sample[] = [
   { name: 'Village', url: '/samples/village.glb', lighting: 'overcast', style: DEFAULT_PIPELINE.style },
   { name: 'Courtyard', url: '/samples/courtyard.glb', lighting: 'overcast', style: DEFAULT_PIPELINE.style },
-  { name: 'Hall', url: '/samples/hall.glb', lighting: 'indoor',
+  {
+    name: 'Hall',
+    url: '/samples/hall.glb',
+    lighting: 'indoor',
     style: 'an abandoned industrial hall: cracked dusty concrete floor, peeling painted plaster walls, rusted steel beams, grimy window frames',
-    roofStyle: 'weathered corrugated metal roofing with rust streaks', floorStyle: 'cracked dusty concrete floor with stains and fine cracks' },
-  { name: 'Loft', url: '/samples/loft.glb', lighting: 'indoor',
+    roofStyle: 'weathered corrugated metal roofing with rust streaks',
+    floorStyle: 'cracked dusty concrete floor with stains and fine cracks',
+  },
+  {
+    name: 'Loft',
+    url: '/samples/loft.glb',
+    lighting: 'indoor',
     style: 'the inside of a modern New York industrial loft: exposed red brick walls, black steel columns and beams, black steel-framed factory windows, a white-painted ceiling, a polished concrete floor; through the windows, brick and stone buildings across the street',
     floorStyle: 'a polished concrete floor: smooth gray concrete with soft mottling, a few hairline cracks and faint straight saw-cut joints',
-    area: [-10, 0, -5, 10, 6, 5] },
-  // the look lives in samples/luxor.look.json, which the headless script reads too (--look)
-  { name: 'Luxor', url: `/${luxor.level}`, lighting: 'overcast', style: luxor.style, floorStyle: luxor.floorStyle,
-    look: { wording: luxor.wording as PipelineOptions['wording'], setting: luxor.setting, styleImages: luxor.styleImages } },
-  { name: 'Tatooine · benchmark courtyard', url: `/${tatooine.level}`, lighting: 'overcast', style: tatooine.style,
-    floorStyle: tatooine.floorStyle, area: tatooine.area,
-    look: { wording: tatooine.wording as PipelineOptions['wording'], setting: tatooine.setting } },
-  // a painted place: samples/hangar.look.json asks for a background painting ('cel'), not a photo, and is made for MiniMax H3
-  { name: 'Hangar', url: `/${hangar.level}`, lighting: 'indoor-soft', style: hangar.style, floorStyle: hangar.floorStyle, area: [...hangar.area, ...hangar.spots.flat()],
-    look: { wording: hangar.wording as PipelineOptions['wording'], setting: hangar.setting, styleImages: hangar.styleImages, styleMax: hangar.styleMax } },
-  { name: 'Sento · painted floor', url: 'preset:sento-floor', preset: 'sento-floor', lighting: 'overcast',
+    area: [-10, 0, -5, 10, 6, 5],
+  },
+  {
+    name: 'Luxor',
+    url: `/${luxor.level}`,
+    lighting: 'overcast',
+    style: luxor.style,
+    floorStyle: luxor.floorStyle,
+    look: { wording: luxor.wording as PipelineOptions['wording'], setting: luxor.setting, styleImages: luxor.styleImages },
+  },
+  {
+    name: 'Tatooine · benchmark',
+    url: `/${tatooine.level}`,
+    lighting: 'overcast',
+    style: tatooine.style,
+    floorStyle: tatooine.floorStyle,
+    area: tatooine.area,
+    look: { wording: tatooine.wording as PipelineOptions['wording'], setting: tatooine.setting },
+  },
+  {
+    name: 'Hangar',
+    url: `/${hangar.level}`,
+    lighting: 'indoor-soft',
+    style: hangar.style,
+    floorStyle: hangar.floorStyle,
+    area: [...hangar.area, ...hangar.spots.flat()],
+    look: { wording: hangar.wording as PipelineOptions['wording'], setting: hangar.setting, styleImages: hangar.styleImages, styleMax: hangar.styleMax },
+  },
+  {
+    name: 'Sento · painted floor',
+    url: 'preset:sento-floor',
+    preset: 'sento-floor',
+    lighting: 'overcast',
     style: 'a traditional Japanese bathhouse with pale ceramic floor tiles, blue tiled baths and hand-painted walls',
-    floorStyle: 'small pale glazed ceramic tiles with recessed grout and preserved painted wear' },
+    floorStyle: 'small pale glazed ceramic tiles with recessed grout and preserved painted wear',
+  },
 ];
 
-const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]) => {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  el.append(...kids);
-  return el;
+type StudioApi = ReturnType<typeof makeApi>;
+type Choice = { value: string; label: string };
+type ConfirmPayload = { title: string; description: string; confirmLabel: string };
+
+const el = <T extends Element = HTMLElement>(tag: string, attrs: Record<string, string> = {}, ...kids: (Node | string)[]) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  node.append(...kids);
+  return node as unknown as T;
 };
 
-function drawThumb(canvas: HTMLCanvasElement, data: Uint8ClampedArray, size: number) {
-  const tmp = h('canvas');
+function makeFeedback() {
+  const node = el('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
+  node.hidden = true;
+  const show = (msg: string, kind: 'info' | 'ok' | 'error' = 'info') => {
+    if (!msg) {
+      node.hidden = true;
+      node.textContent = '';
+      return;
+    }
+    node.hidden = false;
+    node.className = `feedback${kind === 'info' ? '' : ` ${kind}`}`;
+    node.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    node.textContent = msg;
+  };
+  return { el: node, show };
+}
+
+function drawThumb(stage: HTMLElement, canvas: HTMLCanvasElement, data: Uint8ClampedArray, size: number) {
+  const tmp = document.createElement('canvas');
   tmp.width = tmp.height = size;
   tmp.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(data), size, size), 0, 0);
   canvas.width = canvas.height = 256;
   canvas.getContext('2d')!.drawImage(tmp, 0, 0, 256, 256);
+  stage.classList.add('filled');
 }
 
-export function mountUi(session: Session, panel: HTMLElement) {
-  const sample = h('select', { 'aria-label': 'Level' });
-  for (const s of SAMPLES) sample.append(h('option', { value: s.url }, s.name));
-  const drop = h('div', { class: 'drop' }, 'Drop a .glb blockout here (needs UVs)');
-  const file = h('input', { type: 'file', accept: '.glb,.gltf' });
-  file.style.display = 'none';
-  const style = h('textarea', { placeholder: 'Materials, not objects: anything named here gets painted onto walls' });
-  style.value = SAMPLES[0].style;
-  const roofStyle = h('input', { type: 'text', placeholder: 'Roof material' });
-  roofStyle.value = SAMPLES[0].roofStyle ?? DEFAULT_PIPELINE.roofStyle;
-  const floorStyle = h('input', { type: 'text', placeholder: 'Ground material' });
-  floorStyle.value = SAMPLES[0].floorStyle ?? DEFAULT_PIPELINE.floorStyle;
-  const floorBox = h('input', { type: 'checkbox' });
-  const segLight = h('div', { class: 'seg' });
-  const lightBtns = Object.keys(LIGHTING).map((k) => {
-    const b = h('button', {}, k[0].toUpperCase() + k.slice(1));
-    b.onclick = () => setLighting(k);
-    segLight.append(b);
-    return [k, b] as const;
+function makeButton(
+  text: string,
+  onAction: () => void | Promise<unknown>,
+  opts: { variant?: 'solid' | 'destructive'; confirm?: string; className?: string } = {},
+) {
+  const btnAttrs: Record<string, string> = { type: 'button' };
+  if (opts.variant) btnAttrs['data-variant'] = opts.variant;
+  if (opts.confirm) btnAttrs['data-agent-confirm'] = opts.confirm;
+  const native = el<HTMLButtonElement>('button', btnAttrs, text);
+  const root = el<UiButtonElement>('ui-button', opts.className ? { class: opts.className } : {}, native);
+  root.addEventListener('action', (ev) => {
+    const res = onAction();
+    if (res && typeof (res as Promise<unknown>).then === 'function') {
+      ev.detail.waitUntil(res as Promise<unknown>);
+    }
   });
-  const az = h('input', { type: 'range', min: '0', max: '360', value: '140' });
-  const el = h('input', { type: 'range', min: '5', max: '85', value: '48' });
-  const providerSel = h('select', { 'aria-label': 'Provider' });
-  for (const [v, l] of [
-    ['fal', 'Provider · Cloud (fal.ai)'],
-    ['local', 'Provider · Local ($0 · ComfyUI / diffusers / Hunyuan3D)'],
-    ['auto', 'Provider · Auto (local → fal fallback)'],
-  ]) providerSel.append(h('option', { value: v }, l));
-  const localUrlInput = h('input', { type: 'text', placeholder: 'Local server URL (optional, e.g. http://127.0.0.1:8188)' });
-  localUrlInput.value = localStorage.getItem('trompe.localUrl') ?? '';
-  const syncProvider = () => {
-    const prov = providerSel.value as ProviderKind;
-    if (localUrlInput.value.trim()) localStorage.setItem('trompe.localUrl', localUrlInput.value.trim());
-    else localStorage.removeItem('trompe.localUrl');
-    return configureProvider({
-      provider: prov,
-      providerFallback: prov === 'auto' ? 'fal' : 'none',
-      localUrl: localUrlInput.value.trim() || undefined,
-    });
+  return {
+    root,
+    native,
+    setDisabled(v: boolean) {
+      root.disabled = v;
+    },
+    setText(t: string) {
+      native.textContent = t;
+    },
   };
-  providerSel.onchange = localUrlInput.onchange = () => { syncProvider(); };
-  const firstSel = h('select');
-  const fillSel = h('select');
-  for (const m of Object.values(MODELS)) {
-    firstSel.append(h('option', { value: m.key }, `${m.label} · $${m.price}`));
-    fillSel.append(h('option', { value: m.key }, `${m.label} · $${m.price}`));
-  }
-  firstSel.value = DEFAULT_PIPELINE.firstModel;
-  fillSel.value = DEFAULT_PIPELINE.fillModel;
-  const budget = h('input', { type: 'range', min: '6', max: '80', value: '36' });
-  const budgetLab = h('span', { class: 'lab' }, 'Max views · 36');
-  budget.oninput = () => (budgetLab.textContent = `Max views · ${budget.value}`);
-  const aerialBox = h('input', { type: 'checkbox', checked: '' });
-  const adaptiveBox = h('input', { type: 'checkbox' });
-  const checkBox = h('input', { type: 'checkbox', checked: '' });
-  const planesBox = h('input', { type: 'checkbox', checked: '' });
-  const swatchBox = h('input', { type: 'checkbox' });
-  const aoBtn = h('button', {}, 'Bake ambient occlusion · free');
-  // Part names, for a level whose file names none: the prompts say what each gray shape is.
-  const namesBtn = h('button', {}, 'Name the parts');
-  const namesList = h('div', { class: 'parts' });
-  const partsSection = h('section', {}, h('label', {}, 'Parts'), namesBtn, namesList,
-    h('div', { class: 'note' }, 'This level names none of its parts, so a vision model names its shapes before painting. The image models keep a shape far better when the prompt says what it is. Correct any name here.'));
-  partsSection.style.display = 'none';
-  const atlasSel = h('select');
-  for (const [v, l] of [['2048', '2K texture'], ['4096', '4K texture'], ['8192', '8K texture']]) atlasSel.append(h('option', { value: v }, l));
-  atlasSel.value = '8192';
-  const viewSel = h('select');
-  for (const [v, l] of [['2048', '2K views'], ['1024', '1K views (quicker, a little cheaper, about half the detail)']]) viewSel.append(h('option', { value: v }, l));
-  const layoutSel = h('select');
-  for (const [v, l] of [['file', "The level's own UVs"], ['seen', 'Texture laid out by what players see'], ['near', 'Faces joined, sized by how near players get']]) layoutSel.append(h('option', { value: v }, l));
-  const modeSel = h('select', { 'aria-label': 'Planner mode' });
-  for (const [v, l] of [['auto', 'Mode · Auto (level or standalone prop)'], ['level', 'Mode · Level (walkable floor)'], ['object', 'Mode · Object (Fibonacci sphere + close-ups)']]) modeSel.append(h('option', { value: v }, l));
-  const planBtn = h('button', {}, 'Plan cameras');
-  const runBtn = h('button', { class: 'primary' }, 'Texture level');
-  const stopBtn = h('button', {}, 'Stop');
-  const stat = (label: string) => { const b = h('b', {}, '–'); return [h('div', { class: 'stat' }, b, h('i', {}, label)), b] as const; };
-  const [sViews, vViews] = stat('views');
-  const [sCov, vCov] = stat('surface');
-  const [sCost, vCost] = stat('cost');
-  const [sTime, vTime] = stat('time');
-  const thumbSees = h('canvas');
-  const thumbPaints = h('canvas');
-  const segMode = h('div', { class: 'seg' });
-  const clayBtn = h('button', { class: 'on' }, 'Clay');
-  const texBtn = h('button', {}, 'Textured');
-  const litBtn = h('button', {}, 'Lit');
-  segMode.append(clayBtn, texBtn, litBtn);
-  const weightsSel = h('select', { 'aria-label': 'Surface weights overlay' });
-  for (const [v, l] of [
-    ['off', 'Weights overlay · Off'],
-    ['openness', 'Weights · Openness (AO / cavity)'],
-    ['curvature', 'Weights · Convex curvature'],
-    ['light', 'Weights · Static light'],
-    ['class', 'Weights · Semantic class'],
-    ['importance', 'Weights · Combined importance'],
-    ['paths', 'Weights · Player-path bot gaze'],
-  ]) weightsSel.append(h('option', { value: v }, l));
-  const camsBox = h('input', { type: 'checkbox', checked: '' });
-  const walkBtn = h('button', {}, 'Walk the level');
-  const hint = h('div', { id: 'hint' }, 'W A S D to move · Shift to run · Space to jump · click to look around · Esc to leave');
-  document.body.append(hint);
-  const pbrBtn = h('button', {}, 'Make normal + roughness maps');
-  const materialSurface = h('select', { 'aria-label': 'Material surface' });
-  const materialPreset = h('select', { 'aria-label': 'Material response' });
-  materialPreset.append(h('option', { value: '' }, 'Original material'));
-  for (const [id, preset] of Object.entries(MATERIAL_PRESETS)) materialPreset.append(h('option', { value: id }, preset.name));
-  const suggestMaterials = h('button', {}, 'Use presets from surface names · free');
-  const materialNote = h('div', { class: 'note' });
-  const relief = h('input', { type: 'range', min: '0', max: '2', step: '0.05', value: '1' });
-  const floorDetailBox = h('input', { type: 'checkbox' });
-  const floorDetailNote = h('div', { class: 'note' });
-  const floorDetailControls = h('div', {}, h('label', { class: 'row note' }, floorDetailBox, 'Fine floor detail · Lit view'), floorDetailNote);
-  floorDetailControls.hidden = true;
-  const floorExportNote = h('div', { class: 'note' }, 'Fine floor detail is a live viewer effect. Downloads retain the original painted texture and baked maps.');
-  floorExportNote.hidden = true;
-  const runSel = h('select');
-  const runBtnLoad = h('button', {}, 'Load');
-  const runsSection = h('section', {}, h('label', {}, 'Saved runs'), h('div', { class: 'row' }, runSel, runBtnLoad),
-    h('div', { class: 'note' }, 'Runs are written to runs/ view by view as they paint, so a closed tab loses nothing paid for.'));
-  runsSection.style.display = 'none';
-  const glbBtn = h('button', {}, 'Download .glb');
-  const texDl = h('button', {}, 'Download texture');
-  const consolidateBtn = h('button', {}, 'Consolidate view seams · free');
-  const uvRefineBtn = h('button', {}, 'UV-space refine & delight · free');
-  const mapsDl = h('button', {}, 'Download material maps');
-  mapsDl.style.display = 'none';
-  const key = h('input', { type: 'password', placeholder: 'fal key (optional)' });
-  key.value = localStorage.getItem('trompe.falKey') ?? '';
-  const log = h('div', { class: 'log' });
-  const say = (msg: string) => { log.textContent = `${msg}\n${log.textContent}`.slice(0, 6000); };
+}
 
-  panel.append(
-    h('div', {}, h('h1', {}, 'trompe', h('span', {}, '.')), h('div', { class: 'sub' }, 'Texture a whole level from a blockout.')),
-    h('section', {}, h('label', {}, 'Level'), sample, drop, file),
-    runsSection,
-    h('section', {}, h('label', {}, 'Look'), style, h('div', { class: 'lab' }, 'Roofs'), roofStyle, h('div', { class: 'lab' }, 'Ground'), floorStyle),
-    partsSection,
-    h('section', {}, h('label', {}, 'Light'), segLight, h('div', { class: 'row' }, h('span', { class: 'lab' }, 'Sun'), az, el)),
-    h('section', {}, h('label', {}, 'Models'), h('div', { class: 'lab' }, 'First view'), firstSel, h('div', { class: 'lab' }, 'Fills'), fillSel),
-    h('section', {}, budgetLab, budget,
-      h('label', { class: 'row note' }, adaptiveBox, 'Adaptive importance-driven cameras (focus views on lit, open, curved and player-near surfaces)'),
-      h('label', { class: 'row note' }, aerialBox, 'Also paint roofs and outer walls (roof and aerial cameras)'),
-      h('label', { class: 'row note' }, floorBox, 'Paint the ground from straight above first, so it is not stretched (floor cameras)'),
-      h('label', { class: 'row note' }, checkBox, 'Check each view against the blockout and repaint what the model painted over (SAM 2.1, runs in this tab)'),
-      h('label', { class: 'row note' }, planesBox, 'Also check that flat walls and floors come out flat and facing the right way (MoGe-2 on fal, about 1¢ a view)'),
-      h('label', { class: 'row note' }, swatchBox, 'Show mostly-unpainted views material samples from the texture so far (experimental)'),
-      atlasSel, viewSel, layoutSel, modeSel, h('div', { class: 'row' }, planBtn, stopBtn), runBtn),
-    h('section', {}, h('div', { class: 'stats' }, sViews, sCov, sCost, sTime),
-      h('div', { class: 'thumbs' }, thumbSees, thumbPaints), h('div', { class: 'row note' }, h('span', {}, 'Model sees'), h('span', {}, 'Model paints'))),
-    h('section', {}, h('label', {}, 'Materials'), materialSurface, materialPreset, materialNote, suggestMaterials, pbrBtn,
-      h('div', { class: 'row' }, h('span', { class: 'lab' }, 'Relief'), relief), floorDetailControls, aoBtn,
-      h('div', { class: 'note' }, `${MATERIAL_MODEL.label} predicts height and roughness together. Normals come from that height; presets set each surface's response. Original paint stays intact. Baked normal and roughness maps are exported with the .glb.`)),
-    h('section', {}, h('label', {}, 'Display'), segMode, weightsSel, h('label', { class: 'row note' }, camsBox, 'Show cameras'), walkBtn),
-    h('section', {}, h('label', {}, 'Export'), consolidateBtn, uvRefineBtn, h('div', { class: 'row' }, glbBtn, texDl), mapsDl, floorExportNote),
-    h('section', {}, h('label', {}, 'Providers'), providerSel, localUrlInput, key,
-      h('div', { class: 'note' }, 'Local routes to ComfyUI (:8188), diffusers (:8000) or Hunyuan3D-Paint (:8081) at $0. For cloud, empty key uses FAL_KEY from the dev server.')),
-    log,
+function makeToggle(text: string, defaultPressed: boolean, onChange: (pressed: boolean) => void) {
+  const native = el<HTMLButtonElement>('button', { type: 'button' }, text);
+  const root = el<UiToggleElement>('ui-toggle', defaultPressed ? { 'default-pressed': '' } : {}, native);
+  root.addEventListener('pressedchange', (ev) => onChange(ev.detail.value));
+  return {
+    root,
+    native,
+    setPressed(v: boolean) {
+      root.pressed = v;
+    },
+  };
+}
+
+function makeSegmented(
+  label: string,
+  items: Choice[],
+  defaultVal: string,
+  onChange: (val: string) => void,
+  inField = false,
+) {
+  let current = defaultVal;
+  const seg = el<UiSegmentedControlElement>(
+    'ui-segmented-control',
+    {
+      'default-value': defaultVal,
+      ...(inField ? { class: 'full' } : { 'aria-label': label }),
+    },
+    el('ui-segmented-control-indicator'),
+    ...items.map((it) => el('ui-segmented-control-item', { value: it.value }, it.label)),
+  );
+  seg.addEventListener('valuechange', (ev) => {
+    if (typeof ev.detail.value === 'string') {
+      current = ev.detail.value;
+      onChange(current);
+    }
+  });
+  const wrap = inField ? el('ui-field', {}, el('ui-field-label', {}, label), seg) : seg;
+  return {
+    wrap,
+    seg,
+    get value() {
+      return current;
+    },
+    set value(v: string) {
+      current = v;
+      seg.value = v;
+    },
+  };
+}
+
+function makeSelect(
+  label: string,
+  initialItems: Choice[],
+  defaultVal: string,
+  onChange?: (val: string) => void,
+  inlineAria = false,
+) {
+  let current = defaultVal;
+  const content = el('ui-select-content');
+  const triggerBtn = el<HTMLButtonElement>(
+    'button',
+    inlineAria ? { type: 'button', 'aria-label': label } : { type: 'button' },
+    el('ui-select-value'),
+  );
+  const select = el<UiSelectElement>(
+    'ui-select',
+    {
+      'aria-label': label,
+      ...(defaultVal ? { 'default-value': defaultVal } : { placeholder: 'None' }),
+    },
+    el('ui-select-trigger', {}, triggerBtn),
+    content,
   );
 
-  const lightingKey = () => lightBtns.find(([, b]) => b.classList.contains('on'))?.[0] ?? 'outdoor';
-  function setLighting(k: string) {
-    for (const [name, b] of lightBtns) b.classList.toggle('on', name === k);
-    const base = LIGHTING[k];
-    az.value = String(base.sunAzimuth);
-    el.value = String(base.sunElevation);
-    session.setLighting(base);
-  }
-  // In the lit display the sliders move the display sun (shadows follow live); otherwise the light the models paint in.
-  const applySun = () => {
-    const v = session.viewer;
-    if (v?.mode === 'lit') {
-      v.displayLighting = { ...LIGHTING.outdoor, sunAzimuth: +az.value, sunElevation: +el.value };
-      v.syncLighting();
-    } else session.setLighting({ ...LIGHTING[lightingKey()], sunAzimuth: +az.value, sunElevation: +el.value });
+  const setItems = (next: Choice[], selected?: string) => {
+    content.replaceChildren(
+      ...next.map((it) =>
+        el('ui-select-item', { value: it.value, label: it.label }, it.label, el('ui-select-item-indicator')),
+      ),
+    );
+    select.items = next;
+    if (selected !== undefined) {
+      current = selected;
+      select.value = selected || null;
+    }
   };
-  az.oninput = applySun;
-  el.oninput = applySun;
+  setItems(initialItems);
 
-  const setMode = (m: 'clay' | 'textured' | 'lit') => {
-    weightsSel.value = 'off';
-    session.viewer?.setWeightOverlay('off');
-    session.viewer?.setMode(m);
-    clayBtn.classList.toggle('on', m === 'clay');
-    texBtn.classList.toggle('on', m === 'textured');
-    litBtn.classList.toggle('on', m === 'lit');
+  select.addEventListener('valuechange', (ev) => {
+    const raw = ev.detail.value as string | { value?: string } | null;
+    current = typeof raw === 'object' && raw ? (raw.value ?? '') : (raw ?? '');
+    onChange?.(current);
+  });
+
+  const wrap = inlineAria
+    ? el('div', { class: 'tb-select' }, select)
+    : el('ui-field', {}, el('ui-field-label', {}, label), select);
+
+  return {
+    wrap,
+    select,
+    setItems,
+    setDisabled(v: boolean) {
+      select.disabled = v;
+    },
+    get value() {
+      return current;
+    },
+    set value(v: string) {
+      current = v;
+      select.value = v || null;
+    },
   };
-  clayBtn.onclick = () => setMode('clay');
-  texBtn.onclick = () => setMode('textured');
-  litBtn.onclick = () => setMode('lit');
-  weightsSel.onchange = () => {
+}
+
+function makeSlider(
+  label: string,
+  min: number,
+  max: number,
+  step: number,
+  defaultVal: number,
+  format: (v: number) => string,
+  onChange?: (v: number) => void,
+) {
+  let current = defaultVal;
+  const valOut = el('ui-slider-value', {}, format(defaultVal));
+  const slider = el<UiSliderElement>(
+    'ui-slider',
+    { 'aria-label': label, 'default-value': String(defaultVal), min: String(min), max: String(max), step: String(step) },
+    el('div', { class: 'slider-head' }, el('ui-field-label', {}, label), valOut),
+    el(
+      'ui-slider-control',
+      {},
+      el('ui-slider-track', {}, el('ui-slider-indicator'), el('ui-slider-thumb')),
+    ),
+  );
+  slider.format = format;
+  slider.addEventListener('valuechange', (ev) => {
+    const num = Array.isArray(ev.detail.value) ? Number(ev.detail.value[0]) : Number(ev.detail.value);
+    current = num;
+    valOut.textContent = format(num);
+    onChange?.(num);
+  });
+  const wrap = el('ui-field', {}, slider);
+  return {
+    wrap,
+    slider,
+    setDisabled(v: boolean) {
+      slider.disabled = v;
+    },
+    get value() {
+      return current;
+    },
+    set value(v: number) {
+      current = v;
+      slider.value = v;
+      valOut.textContent = format(v);
+    },
+  };
+}
+
+function makeCheckbox(label: string, defaultChecked: boolean, onChange?: (checked: boolean) => void) {
+  let current = defaultChecked;
+  const box = el<UiCheckboxElement>('ui-checkbox', defaultChecked ? { 'default-checked': '' } : {}, el('ui-checkbox-indicator'));
+  box.addEventListener('checkedchange', (ev) => {
+    current = ev.detail.value === true;
+    onChange?.(current);
+  });
+  const wrap = el('label', {}, box, label);
+  return {
+    wrap,
+    box,
+    setDisabled(v: boolean) {
+      box.disabled = v;
+    },
+    get checked() {
+      return current;
+    },
+    set checked(v: boolean) {
+      current = v;
+      box.checked = v;
+    },
+  };
+}
+
+function makeInput(label: string, placeholder: string, defaultVal = '', onChange?: (v: string) => void) {
+  let current = defaultVal;
+  const native = el<HTMLInputElement>('input', { type: 'text', placeholder, value: defaultVal });
+  const input = el<UiInputElement>('ui-input', defaultVal ? { 'default-value': defaultVal } : {}, native);
+  input.addEventListener('valuechange', (ev) => {
+    current = ev.detail.value;
+    onChange?.(current);
+  });
+  const wrap = el('ui-field', {}, el('ui-field-label', {}, label), input);
+  return {
+    wrap,
+    input,
+    get value() {
+      return current;
+    },
+    set value(v: string) {
+      current = v;
+      native.value = v;
+      input.value = v;
+    },
+  };
+}
+
+function makeTextarea(label: string, placeholder: string, defaultVal = '') {
+  let current = defaultVal;
+  const native = el<HTMLTextAreaElement>('textarea', { placeholder, rows: '3' }, defaultVal);
+  const area = el<UiTextareaElement>('ui-textarea', defaultVal ? { 'default-value': defaultVal } : {}, native);
+  area.addEventListener('valuechange', (ev) => {
+    current = ev.detail.value;
+  });
+  const wrap = el('ui-field', {}, el('ui-field-label', {}, label), area);
+  return {
+    wrap,
+    area,
+    get value() {
+      return current;
+    },
+    set value(v: string) {
+      current = v;
+      native.value = v;
+      area.value = v;
+    },
+  };
+}
+
+function makePassword(label: string, placeholder: string, defaultVal = '') {
+  let current = defaultVal;
+  const native = el<HTMLInputElement>('input', { placeholder, value: defaultVal });
+  const toggleBtn = el<HTMLButtonElement>('button', { type: 'button', 'aria-label': 'Show API key' });
+  const pw = el<UiPasswordInputElement>(
+    'ui-password-input',
+    defaultVal ? { 'default-value': defaultVal } : {},
+    native,
+    el('ui-password-input-toggle', {}, toggleBtn),
+  );
+  pw.addEventListener('valuechange', (ev) => {
+    current = ev.detail.value;
+  });
+  const wrap = el('ui-field', {}, el('ui-field-label', {}, label), pw);
+  return {
+    wrap,
+    pw,
+    get value() {
+      return current;
+    },
+  };
+}
+
+export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi) {
+  const getApi = (): StudioApi | undefined => api ?? (window as unknown as { trompe?: StudioApi }).trompe;
+  const stageEl = document.getElementById('stage')!;
+  const centerSplit = document.getElementById('center-split') as UiResizableElement | null;
+
+  const confirmApi = createConfirm<ConfirmPayload>();
+  const dialogTitle = el('ui-alert-dialog-title', {}, 'Confirm action');
+  const dialogDesc = el('ui-alert-dialog-description', {}, '');
+  const dialogConfirmBtn = el<HTMLButtonElement>('button', { type: 'button', 'data-variant': 'destructive' }, 'Confirm');
+  const alertDialog = el<UiAlertDialogElement<ConfirmPayload>>(
+    'ui-alert-dialog',
+    {},
+    el('ui-alert-dialog-backdrop', { hidden: '' }),
+    el(
+      'ui-alert-dialog-content',
+      { hidden: '', 'keep-mounted': '' },
+      dialogTitle,
+      dialogDesc,
+      el(
+        'div',
+        { class: 'row' },
+        el('ui-alert-dialog-close', {}, el('button', { type: 'button' }, 'Cancel')),
+        el('ui-alert-dialog-close', { value: 'confirm' }, dialogConfirmBtn),
+      ),
+    ),
+  );
+  alertDialog.controller = confirmApi.controller;
+  alertDialog.addEventListener('payloadchange', (ev) => {
+    const p = ev.detail.value;
+    if (!p) return;
+    dialogTitle.textContent = p.title;
+    dialogDesc.textContent = p.description;
+    dialogConfirmBtn.textContent = p.confirmLabel;
+  });
+  document.body.append(alertDialog);
+
+  setAgentConfirmHandler(async (message, signal) => {
+    const hook = (window as unknown as { __potemkinAgentConfirm?: (m: string) => boolean }).__potemkinAgentConfirm;
+    if (hook) return hook(message);
+    const onAbort = () => alertDialog.api.close();
+    signal.addEventListener('abort', onAbort, { once: true });
     try {
-      const r = session.setWeightOverlay(weightsSel.value as 'off' | 'openness' | 'curvature' | 'light' | 'class' | 'importance' | 'paths');
-      if (r.overlay !== 'off') {
-        const cls = Object.entries(r.classes).filter(([, s]) => s >= 0.01).map(([k, s]) => `${k} ${Math.round(100 * s)}%`).join(', ');
-        const pInfo = 'paths' in r && r.paths ? ` · bots: ${r.paths.nodes} nav nodes, ${r.paths.poses} poses, ${Math.round(100 * r.paths.highRankShare)}% high-rank` : '';
-        say(`weights (${r.overlay}, ${r.seconds}s): mean openness ${r.mean.openness}, curvature ${r.mean.curvature}, light ${r.mean.light}, importance ${r.mean.importance} · ${cls}${pInfo}`);
-      }
-    } catch (e) { say(String((e as Error)?.message ?? e)); }
-  };
-  camsBox.onchange = () => { if (session.viewer) { session.viewer.overlay.visible = camsBox.checked; session.viewer.dirty = true; } };
+      return await confirmApi({
+        title: 'Allow agent action?',
+        description: message,
+        confirmLabel: 'Allow',
+      });
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  });
 
-  // Walk the level from the player spot nearest what the camera looks at, facing that way.
-  const walking = (on: boolean) => {
-    walkBtn.textContent = on ? 'Stop walking (Esc)' : 'Walk the level';
-    walkBtn.classList.toggle('on', on);
-    hint.classList.toggle('show', on);
-  };
-  walkBtn.onclick = () => {
+  const sampleSel = makeSelect(
+    'Scene',
+    SAMPLES.map((s) => ({ value: s.url, label: s.name })),
+    SAMPLES[0].url,
+    () => onSampleChanged(),
+    true,
+  );
+
+  const importPicker = el<UiFileInputElement>(
+    'ui-file-input',
+    { accept: '.glb,.gltf', 'aria-label': 'Toolbar blockout import' },
+    el('ui-file-input-trigger', {}, el('button', { type: 'button' }, 'Import .glb')),
+  );
+
+  const shadingSeg = makeSegmented(
+    'Shading',
+    [
+      { value: 'clay', label: 'Clay' },
+      { value: 'textured', label: 'Textured' },
+      { value: 'lit', label: 'Lit' },
+    ],
+    'clay',
+    (m) => applyShading(m as 'clay' | 'textured' | 'lit'),
+  );
+
+  const overlaySel = makeSelect(
+    'Viewport overlay',
+    [
+      { value: 'off', label: 'Overlay · Off' },
+      { value: 'openness', label: 'Overlay · Openness' },
+      { value: 'curvature', label: 'Overlay · Curvature' },
+      { value: 'light', label: 'Overlay · Light' },
+      { value: 'class', label: 'Overlay · Class' },
+      { value: 'importance', label: 'Overlay · Importance' },
+      { value: 'paths', label: 'Overlay · Gaze' },
+    ],
+    'off',
+    (val) => onOverlayChanged(val),
+    true,
+  );
+
+  const frustumsToggle = makeToggle('Frustums', true, (pressed) => {
+    if (session.viewer) {
+      session.viewer.overlay.visible = pressed;
+      session.viewer.dirty = true;
+    }
+  });
+
+  const hint = el('div', { id: 'hint', role: 'status', 'aria-live': 'polite' }, 'W A S D move · Shift run · Space jump · Click look · Esc exit');
+  stageEl.append(hint);
+
+  const walkToggle = makeToggle('Walkthrough', false, (wantWalk) => {
     const v = session.viewer;
     if (!v) return;
-    if (v.walker) { v.stopWalk(); walking(false); return; }
+    if (!wantWalk) {
+      if (v.walker) v.stopWalk();
+      hint.classList.remove('show');
+      return;
+    }
     try {
       const eye = session.walkStart();
       const to = v.controls.target;
       const yaw = Math.hypot(to.x - eye.x, to.z - eye.z) > 0.5 ? Math.atan2(eye.x - to.x, eye.z - to.z) : 0;
-      v.startWalk(eye, yaw, () => walking(false));
-      walking(true);
-      walkBtn.blur();   // so Space jumps instead of pressing the button again
-    } catch (e) { say(String(e)); }
+      v.startWalk(eye, yaw, () => {
+        walkToggle.setPressed(false);
+        hint.classList.remove('show');
+      });
+      hint.classList.add('show');
+      walkToggle.native.blur();
+    } catch (e) {
+      walkToggle.setPressed(false);
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
+    }
+  });
+
+  const planBtn = makeButton('Plan cameras', () => runPlan());
+  const runBtn = makeButton('Paint textures', () => runPaint(), {
+    variant: 'solid',
+    confirm: 'Generates textures across planned cameras',
+  });
+  const stopBtn = makeButton(
+    'Stop',
+    async () => {
+      if (!isRunning) return;
+      const yes = await confirmApi({
+        title: 'Abort current run?',
+        description: 'Completed views stay saved on disk; any view currently in flight may still be billed.',
+        confirmLabel: 'Abort now',
+      });
+      if (yes) session.stop();
+    },
+    { variant: 'destructive' },
+  );
+  stopBtn.setDisabled(true);
+
+  const glbBtn = makeButton('Export GLB', () => runExportGlb());
+
+  const leftDockToggle = makeToggle('Left dock', false, (on) => {
+    document.body.classList.remove('show-right');
+    rightDockToggle.setPressed(false);
+    document.body.classList.toggle('show-left', on);
+  });
+  const rightDockToggle = makeToggle('Right dock', false, (on) => {
+    document.body.classList.remove('show-left');
+    leftDockToggle.setPressed(false);
+    document.body.classList.toggle('show-right', on);
+  });
+  const mobileBtns = el('div', { class: 'mobile-dock-btns' }, leftDockToggle.root, rightDockToggle.root);
+
+  const syncMobileMode = () => {
+    const narrow = window.matchMedia('(max-width: 720px)').matches;
+    mobileBtns.hidden = !narrow;
+    if (narrow) {
+      mobileBtns.removeAttribute('data-agent-hidden');
+      document.documentElement.style.setProperty('--mobile-top', `${mounts.topbar.offsetHeight || 76}px`);
+    } else {
+      mobileBtns.setAttribute('data-agent-hidden', '');
+      document.body.classList.remove('show-left', 'show-right');
+    }
   };
 
-  const money = (n: number) => `$${n.toFixed(2)}`;
-  // one editable name per shape, largest first; unnamed shapes show as empty fields
-  const syncParts = () => {
-    const level = session.level;
-    partsSection.style.display = level?.shapes ? '' : 'none';
-    if (!level?.shapes) return;
-    const named = level.labels.some(Boolean);
-    namesBtn.textContent = named ? 'Name the parts again' : `Name the ${level.shapes.length} parts · about ${money(0.006 * Math.min(48, level.shapes.length))}`;
-    namesList.replaceChildren(...(named ? level.labels.map((name, k) => {
-      const input = h('input', { type: 'text', placeholder: `shape ${k + 1}, ${Math.round(level.shapes![k].area)} m²` });
-      input.value = name;
-      input.onchange = () => session.setPartName(k, input.value);
-      return input;
-    }) : []));
-  };
-  namesBtn.onclick = async () => {
-    if (!session.level?.shapes) return;
-    key.value ? localStorage.setItem('trompe.falKey', key.value) : localStorage.removeItem('trompe.falKey');
-    configureFal(key.value || undefined);
-    namesBtn.disabled = runBtn.disabled = true;
-    try {
-      const r = await session.nameParts(style.value, (done, total) => { namesBtn.textContent = `Naming shape ${done}/${total}…`; });
-      say(`named ${r.names.filter(Boolean).length} of ${r.names.length} shapes, ${money(r.cost)}, ${Math.round(r.seconds)}s`);
-    } catch (e) {
-      say(String((e as Error)?.message ?? e));
-    } finally {
-      namesBtn.disabled = runBtn.disabled = false;
-      syncParts();
+  mounts.topbar.append(
+    el('div', { class: 'tb-group' }, el('h1', { class: 'brand-mark' }, 'Potemkin ', el('span', {}, '3D')), el('span', { class: 'tb-sep' }), sampleSel.wrap, importPicker),
+    el('div', { class: 'tb-group tb-viewport-strip' }, shadingSeg.wrap, overlaySel.wrap, frustumsToggle.root, walkToggle.root),
+    el(
+      'div',
+      { class: 'tb-group' },
+      planBtn.root,
+      runBtn.root,
+      stopBtn.root,
+      el('span', { class: 'tb-sep' }),
+      glbBtn.root,
+      el('a', { class: 'tb-link', href: '/loft-walk.html' }, 'Viewer ↗'),
+      mobileBtns,
+    ),
+  );
+  window.addEventListener('resize', syncMobileMode);
+  queueMicrotask(syncMobileMode);
+
+  const vpLeft = el('div', { class: 'vp-pill' }, el('strong', {}, 'Village'), ' · Clay · 45°/65°');
+  const vpRight = el('div', { class: 'vp-pill' }, 'Idle');
+  mounts.viewportHud.append(vpLeft, vpRight);
+
+  const geoMeta = el('span', { class: 'pane-meta' }, '–');
+  const outlinerListbox = el<UiListboxElement>('ui-listbox', { 'aria-label': 'Outliner surfaces', activation: 'manual' });
+  const outlinerEmpty = el('div', { class: 'pane-body' }, el('div', { class: 'note' }, 'Single unlabelled mesh — run Auto-name shapes below to segment parts.'));
+  outlinerListbox.addEventListener('valuechange', (ev) => {
+    const val = ev.detail.value as string | null;
+    if (val) {
+      activePartSel.value = val;
+      inspectorTabs.value = 'material';
+      syncPbr();
     }
-  };
-  const syncPbr = () => {
-    const e = session.engine;
-    const have = !!e?.pbr;
-    pbrBtn.textContent = e ? `Predict aligned material maps · up to ${money(pbrQuote(e.atlas.size).cost)}` : 'Predict aligned material maps';
-    const labels = session.level?.labels.filter(Boolean) ?? [];
-    if (Array.from(materialSurface.options, option => option.value).join('\n') !== labels.join('\n')) {
-      const selected = materialSurface.value;
-      materialSurface.replaceChildren(...labels.map(label => h('option', { value: label }, label)));
-      if (labels.includes(selected)) materialSurface.value = selected;
+  });
+
+  const namesBtn = makeButton('Auto-name shapes', () => runAutoName(), {
+    className: 'full-btn',
+    confirm: 'Calls vision model to name unlabelled shapes',
+  });
+  const namesList = el('div', { class: 'parts' });
+  const unlabelledWrap = el('div', { class: 'pane-body' }, namesBtn.root, namesList);
+  unlabelledWrap.hidden = true;
+
+  const runCountMeta = el('span', { class: 'pane-meta' }, '0');
+  const savedRunSel = makeSelect('Saved take', [], '');
+  const loadRunBtn = makeButton('Load take', () => runLoadSaved(), { className: 'fit' });
+  const runsRow = el('div', { class: 'row' }, savedRunSel.wrap, loadRunBtn.root);
+  runsRow.hidden = true;
+  const runsEmptyNote = el('div', { class: 'note' }, 'No saved takes yet.');
+
+  const dropPicker = el<UiFileInputElement>(
+    'ui-file-input',
+    { accept: '.glb,.gltf', 'aria-label': 'Takes blockout dropzone' },
+    el(
+      'ui-file-input-dropzone',
+      {},
+      el('span', { class: 'note' }, 'Drop .glb blockout'),
+      el('ui-file-input-trigger', {}, el('button', { type: 'button' }, 'Browse file')),
+    ),
+  );
+
+  const leftSplit = el<UiResizableElement>(
+    'ui-resizable',
+    { orientation: 'vertical', 'aria-label': 'Outliner and takes', 'auto-save-id': 'potemkin-left' },
+    el(
+      'ui-resizable-panel',
+      { id: 'panel-outliner', 'default-size': '62', 'min-size': '25' },
+      el('div', { class: 'pane-head' }, el('h2', { class: 'pane-title' }, 'Outliner'), geoMeta),
+      outlinerListbox,
+      outlinerEmpty,
+      unlabelledWrap,
+    ),
+    el('ui-resizable-handle', { 'aria-label': 'Resize outliner and takes' }),
+    el(
+      'ui-resizable-panel',
+      { id: 'panel-takes', 'default-size': '38', 'min-size': '24' },
+      el('div', { class: 'pane-head' }, el('h2', { class: 'pane-title' }, 'Takes'), runCountMeta),
+      el('div', { class: 'pane-body' }, runsRow, runsEmptyNote, dropPicker),
+    ),
+  );
+  mounts.leftDock.append(leftSplit);
+
+  const styleArea = makeTextarea('Surface prompt', 'Describe surface materials (stone, plaster, timber, metal)…', SAMPLES[0].style);
+  const roofInput = makeInput('Roof material', 'Roof material', SAMPLES[0].roofStyle ?? DEFAULT_PIPELINE.roofStyle);
+  const floorInput = makeInput('Ground material', 'Ground material', SAMPLES[0].floorStyle ?? DEFAULT_PIPELINE.floorStyle);
+
+  const skySeg = makeSegmented(
+    'Sky preset',
+    [
+      { value: 'outdoor', label: 'Outdoor' },
+      { value: 'overcast', label: 'Overcast' },
+      { value: 'indoor', label: 'Indoor' },
+      { value: 'indoor-soft', label: 'Soft' },
+    ],
+    SAMPLES[0].lighting,
+    (k) => setLighting(k),
+    true,
+  );
+  const azSlider = makeSlider('Sun azimuth', 0, 360, 1, 140, (v) => `${Math.round(v)}°`, () => applySun());
+  const elSlider = makeSlider('Sun elevation', 5, 85, 1, 48, (v) => `${Math.round(v)}°`, () => applySun());
+
+  const budgetSlider = makeSlider('Camera budget', 6, 80, 1, 36, (v) => `${Math.round(v)}`);
+  const targetModeSel = makeSelect(
+    'Target geometry',
+    [
+      { value: 'auto', label: 'Auto (level vs object)' },
+      { value: 'level', label: 'Level (walkable floor)' },
+      { value: 'object', label: 'Object (sphere + probes)' },
+    ],
+    'auto',
+    () => {
+      syncModeUi();
+      onSampleChanged();
+    },
+  );
+  const focusPartsInput = makeInput('Focus parts', 'barrel, visor, wheel');
+  focusPartsInput.wrap.hidden = true;
+
+  const atlasSel = makeSelect(
+    'Atlas resolution',
+    [
+      { value: '2048', label: '2K' },
+      { value: '4096', label: '4K' },
+      { value: '8192', label: '8K' },
+    ],
+    '8192',
+    () => onSampleChanged(),
+  );
+  const viewResSel = makeSelect(
+    'View resolution',
+    [
+      { value: '2048', label: '2K' },
+      { value: '1024', label: '1K' },
+    ],
+    '2048',
+    () => onSampleChanged(),
+  );
+  const uvLayoutSel = makeSelect(
+    'UV packing',
+    [
+      { value: 'file', label: 'File UVs' },
+      { value: 'seen', label: 'Visible faces' },
+      { value: 'near', label: 'Sightline & strips' },
+    ],
+    'file',
+    () => onSampleChanged(),
+  );
+
+  const adaptiveChk = makeCheckbox('Adaptive Fisher probes', false);
+  const weightsChk = makeCheckbox('Weight UVs by gaze & AO', true, () => onSampleChanged());
+  const aerialChk = makeCheckbox('Aerial roof cameras', true);
+  const floorChk = makeCheckbox('Overhead floor pass', true);
+  const samChk = makeCheckbox('SAM blockout check', true);
+  const mogeChk = makeCheckbox('MoGe normal check', true);
+  const swatchChk = makeCheckbox('Material swatches', false);
+
+  const providerSel = makeSelect(
+    'Inference provider',
+    [
+      { value: 'fal', label: 'Cloud · fal.ai' },
+      { value: 'local', label: 'Local · $0' },
+      { value: 'auto', label: 'Auto · Local + fallback' },
+    ],
+    'fal',
+    () => {
+      syncProvider();
+      syncPbr();
+    },
+  );
+  const localBackendSel = makeSelect(
+    'Local backend',
+    [
+      { value: 'auto', label: 'Auto-probe GPU' },
+      { value: 'comfyui', label: 'ComfyUI (:8188)' },
+      { value: 'diffusers', label: 'Diffusers (:8000)' },
+      { value: 'hunyuan3d', label: 'Hunyuan3D (:8081)' },
+      { value: 'procedural', label: 'Procedural (CPU)' },
+    ],
+    'auto',
+    () => syncProvider(),
+  );
+  const localUrlInput = makeInput('Loopback endpoint', 'http://127.0.0.1:8188', localStorage.getItem('trompe.localUrl') ?? '', () => syncProvider());
+  const modelChoices = Object.values(MODELS).map((m) => ({ value: m.key, label: `${m.label} · $${m.price}` }));
+  const firstModelSel = makeSelect('First-view model', modelChoices, DEFAULT_PIPELINE.firstModel);
+  const fillModelSel = makeSelect('Fill-view model', modelChoices, DEFAULT_PIPELINE.fillModel);
+  const apiKeyInput = makePassword('Cloud API key', 'Uses server FAL_KEY when blank', localStorage.getItem('trompe.falKey') ?? '');
+
+  const syncProvider = () => {
+    const prov = providerSel.value as ProviderKind;
+    const isFal = prov === 'fal';
+    const isLocal = prov === 'local';
+    localBackendSel.wrap.hidden = isFal;
+    localUrlInput.wrap.hidden = isFal || localBackendSel.value === 'procedural';
+    firstModelSel.wrap.hidden = isLocal;
+    fillModelSel.wrap.hidden = isLocal;
+    apiKeyInput.wrap.hidden = isLocal;
+    for (const w of [localBackendSel.wrap, localUrlInput.wrap, firstModelSel.wrap, fillModelSel.wrap, apiKeyInput.wrap]) {
+      if (w.hidden) w.setAttribute('data-agent-hidden', '');
+      else w.removeAttribute('data-agent-hidden');
     }
-    materialSurface.disabled = materialPreset.disabled = !labels.length;
-    suggestMaterials.disabled = !labels.length;
-    materialPreset.value = e?.materialPresets[materialSurface.value] ?? '';
-    const preset = isMaterialPreset(materialPreset.value) ? MATERIAL_PRESETS[materialPreset.value] : undefined;
-    const source = e?.pbr?.source?.kind;
-    const floorHeight = session.viewer?.floorDetailState.enabled && session.viewer.floorDetailState.label === materialSurface.value;
-    materialNote.textContent = preset ? `Roughness ${preset.roughness.toFixed(2)} · height span up to ${(preset.heightMetres * 1000).toFixed(2)} mm. ` +
-      (floorHeight ? 'Normals follow the aligned floor height.' : source?.endsWith('height') ? 'Normals follow the aligned height map.' : source === 'legacy-normal' ? 'Existing normals use restrained relief.' : 'Flat until a height or normal source is available.')
-      : 'Choose a response for this surface. Presets keep the painted colors and can be changed without a model call.';
-    const detail = session.viewer?.floorDetailState;
-    floorDetailControls.hidden = !detail?.available;
-    floorDetailBox.checked = !!detail?.enabled;
-    floorDetailBox.disabled = !!detail?.stale;
-    floorDetailNote.textContent = detail?.stale ? 'Paused after repainting. Reload the prepared Sento floor to use its reviewed paint mask.'
-      : 'Sharper tiles and grout, with the painted marks preserved. Toggle to compare.';
-    floorExportNote.hidden = !detail?.available;
-    relief.disabled = !have && !detail?.enabled;
-    mapsDl.style.display = have ? '' : 'none';
-    aoBtn.textContent = e?.ao ? 'Bake ambient occlusion again · free' : 'Bake ambient occlusion · free';
+    const urlVal = localUrlInput.value.trim();
+    if (urlVal) localStorage.setItem('trompe.localUrl', urlVal);
+    else localStorage.removeItem('trompe.localUrl');
+    return configureProvider({
+      provider: prov,
+      providerFallback: prov === 'auto' ? 'fal' : 'none',
+      localBackend: localBackendSel.value as LocalBackend,
+      localUrl: urlVal || undefined,
+    });
   };
-  relief.oninput = () => session.viewer?.setRelief(+relief.value);
-  materialSurface.onchange = syncPbr;
-  const applyMaterials = async (assignments: MaterialAssignments) => {
-    const engine = session.engine;
-    materialPreset.disabled = suggestMaterials.disabled = true;
-    materialNote.textContent = 'Updating material responses…';
-    try {
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      if (engine !== session.engine) return;
-      session.setMaterialPresets(assignments);
-      setMode('lit');
-      if (savedAs) await session.saveRun(savedAs);
-    } catch (e) { say(String((e as Error).message)); }
-    finally { syncPbr(); }
+  syncProvider();
+
+  const criticPill = el('span', { class: 'pill' }, 'Not scored');
+  const makeStat = (lbl: string) => {
+    const b = el('b', {}, '–');
+    return [el('div', { class: 'stat' }, b, el('i', {}, lbl)), b] as const;
   };
-  materialPreset.onchange = () => {
+  const [cScoreEl, vCScore] = makeStat('Score');
+  const [cSeenEl, vCSeen] = makeStat('Seen');
+  const [cPxEl, vCPx] = makeStat('px/m');
+  const [cSeamEl, vCSeam] = makeStat('Seam');
+  const criticStats = el('div', { class: 'stats' }, cScoreEl, cSeenEl, cPxEl, cSeamEl);
+  criticStats.hidden = true;
+  const criticEmpty = el('div', { class: 'note' }, 'Paint a scene or load a take, then evaluate coverage, consistency, seams and baked shading.');
+  const criticChips = el('div', { class: 'chips' });
+  const critiqueBtn = makeButton('Evaluate quality', () => runCritique());
+  const repairRunBtn = makeButton('Apply repairs', () => runPrescribedRepairs(), {
+    variant: 'solid',
+    confirm: 'Runs Critic-prescribed repair passes',
+  });
+  repairRunBtn.root.hidden = true;
+  const consolidateBtn = makeButton('Stitch seams', () => runConsolidate());
+  const uvRefineBtn = makeButton('Refine UVs', () => runUvRefine());
+  const criticFeedback = makeFeedback();
+  let latestCritique: CritiqueReport | null = null;
+
+  const activePartSel = makeSelect('Active part', [], '', () => syncPbr());
+  const presetChoices: Choice[] = [
+    { value: '', label: 'Original response' },
+    ...Object.entries(MATERIAL_PRESETS).map(([id, p]) => ({ value: id, label: p.name })),
+  ];
+  const presetSel = makeSelect('Response preset', presetChoices, '', (val) => {
     const assignments = { ...session.engine?.materialPresets };
-    if (isMaterialPreset(materialPreset.value)) assignments[materialSurface.value] = materialPreset.value;
-    else delete assignments[materialSurface.value];
+    if (isMaterialPreset(val)) assignments[activePartSel.value] = val;
+    else delete assignments[activePartSel.value];
     void applyMaterials(assignments);
-  };
-  suggestMaterials.onclick = () => {
+  });
+  const suggestBtn = makeButton('Suggest presets', () => {
     const assignments = { ...session.engine?.materialPresets };
     const suggested = session.level ? session.suggestMaterialPresets() : {};
     for (const label of session.level?.labels ?? []) {
       const preset = suggestMaterialPreset(label) ?? suggested[label];
       if (preset && !assignments[label]) assignments[label] = preset;
     }
-    void applyMaterials(assignments);
-  };
-  floorDetailBox.onchange = () => {
+    return applyMaterials(assignments);
+  }, { className: 'full-btn' });
+  const materialNote = el('div', { class: 'note' });
+
+  const pbrModeSel = makeSelect(
+    'PBR pipeline',
+    [
+      { value: 'auto', label: 'Auto (intrinsic / PATINA)' },
+      { value: 'intrinsic', label: 'Intrinsic · $0' },
+      { value: 'patina', label: 'PATINA tiles + metallic' },
+    ],
+    'auto',
+    () => syncPbr(),
+  );
+  const pbrBtn = makeButton('Build PBR', () => runPbr());
+  const aoBtn = makeButton('Bake occlusion', () => runBakeAo());
+  const reliefSlider = makeSlider('Relief depth', 0, 2, 0.05, 1, (v) => `${v.toFixed(2)}×`, (v) => {
+    session.viewer?.setRelief(v);
+  });
+
+  const floorDetailChk = makeCheckbox('Fine tile detail', false, (checked) => {
     try {
-      session.viewer?.setFloorDetailEnabled(floorDetailBox.checked);
-      if (floorDetailBox.checked) setMode('lit');
-    } catch (e) { say(String(e)); }
-    syncPbr();
-  };
-  // Ambient occlusion: rays against the level's own geometry, so no model and no cost; about 15 to 30 s.
-  aoBtn.onclick = async () => {
-    if (!session.engine) return;
-    aoBtn.disabled = true;
-    try {
-      const ao = await session.bakeAo({}, (done, total) => { aoBtn.textContent = `Baking occlusion: ${Math.round((100 * done) / Math.max(1, total))}%`; });
-      setMode('lit');
-      say(`ambient occlusion: ${ao.size} px, ${ao.rays} rays a texel, ${Math.round(ao.seconds)}s. Shown in the Lit display and exported in the .glb's occlusion channel.`);
-      if (savedAs) { await session.saveRun(savedAs); say(`saved with runs/${savedAs}/`); }
+      session.viewer?.setFloorDetailEnabled(checked);
+      if (checked) applyShading('lit');
     } catch (e) {
-      say(String((e as Error)?.message ?? e));
+      matFeedback.show(String((e as Error)?.message ?? e), 'error');
+    }
+    syncPbr();
+  });
+  const floorDetailWrap = el('div', { class: 'check-list' }, floorDetailChk.wrap);
+  floorDetailWrap.hidden = true;
+
+  const albedoExportBtn = makeButton('Save albedo PNG', () => exportAlbedoPng(), { className: 'full-btn' });
+  const channelFmtSel = makeSelect(
+    'Channel packing',
+    [
+      { value: 'both', label: 'ORM + separate linear PNGs' },
+      { value: 'orm', label: 'glTF ORM + Normal only' },
+      { value: 'separate', label: 'Separate linear channels' },
+    ],
+    'both',
+  );
+  const pbrExportBtn = makeButton('Save PBR PNGs', () => exportPbrPngs(), { className: 'full-btn' });
+  const pbrExportWrap = el('div', { class: 'check-list' }, channelFmtSel.wrap, pbrExportBtn.root);
+  pbrExportWrap.hidden = true;
+  const matFeedback = makeFeedback();
+
+  const inspectorTabs = el<UiTabsElement>(
+    'ui-tabs',
+    { 'default-value': 'look', 'aria-label': 'Inspector sections' },
+    el(
+      'ui-tabs-list',
+      { 'aria-label': 'Inspector sections' },
+      el('ui-tabs-tab', { value: 'look' }, el('button', { type: 'button' }, 'Look')),
+      el('ui-tabs-tab', { value: 'plan' }, el('button', { type: 'button' }, 'Plan')),
+      el('ui-tabs-tab', { value: 'critic' }, el('button', { type: 'button' }, 'Critic')),
+      el('ui-tabs-tab', { value: 'material' }, el('button', { type: 'button' }, 'Material')),
+      el('ui-tabs-indicator'),
+    ),
+    el(
+      'ui-tabs-panel',
+      { value: 'look', 'keep-mounted': '' },
+      styleArea.wrap,
+      roofInput.wrap,
+      floorInput.wrap,
+      el('div', { class: 'divider' }),
+      skySeg.wrap,
+      azSlider.wrap,
+      elSlider.wrap,
+    ),
+    el(
+      'ui-tabs-panel',
+      { value: 'plan', 'keep-mounted': '', hidden: '' },
+      budgetSlider.wrap,
+      targetModeSel.wrap,
+      focusPartsInput.wrap,
+      el('div', { class: 'row' }, atlasSel.wrap, viewResSel.wrap),
+      uvLayoutSel.wrap,
+      el(
+        'div',
+        { class: 'check-list' },
+        adaptiveChk.wrap,
+        weightsChk.wrap,
+        aerialChk.wrap,
+        floorChk.wrap,
+        samChk.wrap,
+        mogeChk.wrap,
+        swatchChk.wrap,
+      ),
+      el('div', { class: 'divider' }),
+      providerSel.wrap,
+      localBackendSel.wrap,
+      localUrlInput.wrap,
+      firstModelSel.wrap,
+      fillModelSel.wrap,
+      apiKeyInput.wrap,
+    ),
+    el(
+      'ui-tabs-panel',
+      { value: 'critic', 'keep-mounted': '', hidden: '' },
+      el('div', { class: 'slider-head' }, el('span', { class: 'pane-title' }, 'Quality verdict'), criticPill),
+      criticEmpty,
+      criticStats,
+      criticChips,
+      el('div', { class: 'row' }, critiqueBtn.root, repairRunBtn.root),
+      el('div', { class: 'divider' }),
+      el('div', { class: 'row' }, consolidateBtn.root, uvRefineBtn.root),
+      criticFeedback.el,
+    ),
+    el(
+      'ui-tabs-panel',
+      { value: 'material', 'keep-mounted': '', hidden: '' },
+      activePartSel.wrap,
+      presetSel.wrap,
+      materialNote,
+      suggestBtn.root,
+      el('div', { class: 'divider' }),
+      pbrModeSel.wrap,
+      el('div', { class: 'row' }, pbrBtn.root, aoBtn.root),
+      reliefSlider.wrap,
+      floorDetailWrap,
+      el('div', { class: 'divider' }),
+      albedoExportBtn.root,
+      pbrExportWrap,
+      matFeedback.el,
+    ),
+  );
+  mounts.rightDock.append(inspectorTabs);
+
+  const thumbSees = document.createElement('canvas');
+  const thumbPaints = document.createElement('canvas');
+  const stageSees = el('div', { class: 'thumb-stage' }, thumbSees, el('div', { class: 'thumb-empty' }, 'Sees'));
+  const stagePaints = el('div', { class: 'thumb-stage' }, thumbPaints, el('div', { class: 'thumb-empty' }, 'Paints'));
+
+  const [sViews, vViews] = makeStat('Views');
+  const [sCov, vCov] = makeStat('Surface');
+  const [sCost, vCost] = makeStat('Cost');
+  const [sTime, vTime] = makeStat('Time');
+  const statusBanner = makeFeedback();
+  statusBanner.show('Ready — select a scene, plan cameras, or load a saved take.', 'info');
+
+  const log = el('pre', { class: 'log', 'aria-live': 'off' });
+  const say = (msg: string) => {
+    log.textContent = `${msg}\n${log.textContent}`.slice(0, 6000);
+  };
+
+  const toggleMonitorBtn = makeButton('Toggle monitor', () => {
+    if (!centerSplit) return;
+    if (centerSplit.api.isCollapsed('panel-bottom')) centerSplit.api.expand('panel-bottom');
+    else centerSplit.api.collapse('panel-bottom');
+  }, { className: 'ghost-mini' });
+
+  mounts.bottomDock.append(
+    el('div', { class: 'pane-head' }, el('h2', { class: 'pane-title' }, 'Monitor'), toggleMonitorBtn.root),
+    el(
+      'div',
+      { class: 'bottom-grid' },
+      el('div', { class: 'bottom-cell bottom-frames' }, el('div', { class: 'thumbs' }, stageSees, stagePaints)),
+      el('div', { class: 'bottom-cell' }, el('div', { class: 'stats' }, sViews, sCov, sCost, sTime), statusBanner.el),
+      el('div', { class: 'bottom-cell bottom-log' }, log),
+    ),
+  );
+
+  let isRunning = false;
+  let savedAs: string | undefined;
+  let currentShading: 'clay' | 'textured' | 'lit' = 'clay';
+  const canSave = import.meta.env.DEV && !new URLSearchParams(location.search).has('nosave');
+  const money = (n: number) => `$${n.toFixed(2)}`;
+
+  const syncHiddenAgentState = (node: HTMLElement, hide: boolean) => {
+    node.hidden = hide;
+    if (hide) node.setAttribute('data-agent-hidden', '');
+    else node.removeAttribute('data-agent-hidden');
+  };
+
+  const syncViewportHud = () => {
+    const sceneTitle = session.level?.name ?? 'Scene';
+    const modeTitle = currentShading[0].toUpperCase() + currentShading.slice(1);
+    vpLeft.replaceChildren(
+      el('strong', {}, sceneTitle),
+      ` · ${modeTitle} · ${Math.round(azSlider.value)}°/${Math.round(elSlider.value)}°`,
+    );
+    vpRight.textContent = vViews.textContent === '–' ? 'Idle' : `${vViews.textContent}v · ${vCov.textContent} · ${vCost.textContent}`;
+  };
+
+  const syncRunAvailability = () => {
+    const hasRun = !!session.record;
+    critiqueBtn.setDisabled(!hasRun || isRunning);
+    consolidateBtn.setDisabled(!hasRun || isRunning);
+    uvRefineBtn.setDisabled(!hasRun || isRunning);
+    criticEmpty.hidden = hasRun;
+  };
+
+  const syncOutliner = () => {
+    const labels = session.level?.labels.filter(Boolean) ?? [];
+    const presets = session.engine?.materialPresets ?? {};
+    syncHiddenAgentState(outlinerListbox, labels.length === 0);
+    outlinerEmpty.hidden = labels.length > 0;
+    if (!labels.length) {
+      outlinerListbox.replaceChildren();
+      return;
+    }
+    const selected = activePartSel.value || labels[0];
+    outlinerListbox.replaceChildren(
+      ...labels.map((lbl) =>
+        el(
+          'ui-listbox-item',
+          { value: lbl, label: lbl },
+          lbl,
+          el('span', { class: 'part-tag' }, presets[lbl] ?? 'default'),
+        ),
+      ),
+    );
+    outlinerListbox.items = labels.map((lbl) => ({ value: lbl, label: lbl }));
+    outlinerListbox.value = selected;
+  };
+
+  function setLighting(k: string) {
+    skySeg.value = k;
+    const base = LIGHTING[k] ?? LIGHTING.outdoor;
+    azSlider.value = base.sunAzimuth;
+    elSlider.value = base.sunElevation;
+    session.setLighting(base);
+    syncViewportHud();
+  }
+
+  function applySun() {
+    const az = azSlider.value;
+    const elDeg = elSlider.value;
+    const v = session.viewer;
+    if (v?.mode === 'lit') {
+      v.displayLighting = { ...LIGHTING.outdoor, sunAzimuth: az, sunElevation: elDeg };
+      v.syncLighting();
+    } else {
+      session.setLighting({ ...(LIGHTING[skySeg.value] ?? LIGHTING.outdoor), sunAzimuth: az, sunElevation: elDeg });
+    }
+    syncViewportHud();
+  }
+
+  function applyShading(m: 'clay' | 'textured' | 'lit') {
+    currentShading = m;
+    shadingSeg.value = m;
+    overlaySel.value = 'off';
+    session.viewer?.setWeightOverlay('off');
+    session.viewer?.setMode(m);
+    syncViewportHud();
+  }
+
+  function onOverlayChanged(val: string) {
+    try {
+      const r = session.setWeightOverlay(val as 'off' | 'openness' | 'curvature' | 'light' | 'class' | 'importance' | 'paths');
+      if (r.overlay !== 'off') {
+        const cls = Object.entries(r.classes)
+          .filter(([, s]) => s >= 0.01)
+          .map(([k, s]) => `${k} ${Math.round(100 * s)}%`)
+          .join(', ');
+        const pInfo = 'paths' in r && r.paths ? ` · ${r.paths.nodes} nodes` : '';
+        statusBanner.show(`Overlay ${r.overlay} (${r.seconds}s): openness ${r.mean.openness}, curvature ${r.mean.curvature}${pInfo}`, 'info');
+        say(`overlay ${r.overlay}: ${cls}${pInfo}`);
+      }
+    } catch (e) {
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
+    }
+  }
+
+  const syncParts = () => {
+    const level = session.level;
+    syncHiddenAgentState(unlabelledWrap, !level?.shapes);
+    if (!level?.shapes) return;
+    const named = level.labels.some(Boolean);
+    namesList.replaceChildren(
+      ...(named
+        ? level.labels.map((name, k) => {
+            const fieldCtrl = makeInput(`Shape ${k + 1}`, `shape ${k + 1}, ${Math.round(level.shapes![k].area)} m²`, name, (v) => {
+              session.setPartName(k, v);
+              syncOutliner();
+            });
+            return fieldCtrl.wrap;
+          })
+        : []),
+    );
+  };
+
+  async function runAutoName() {
+    if (!session.level?.shapes) return;
+    apiKeyInput.value ? localStorage.setItem('trompe.falKey', apiKeyInput.value) : localStorage.removeItem('trompe.falKey');
+    configureFal(apiKeyInput.value || undefined);
+    namesBtn.setDisabled(true);
+    runBtn.setDisabled(true);
+    try {
+      const r = await session.nameParts(styleArea.value, (done, total) => {
+        namesBtn.setText(`Naming ${done}/${total}…`);
+      });
+      statusBanner.show(`Named ${r.names.filter(Boolean).length}/${r.names.length} shapes (${money(r.cost)}).`, 'ok');
+      say(`named ${r.names.filter(Boolean).length}/${r.names.length} shapes`);
+    } catch (e) {
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
     } finally {
-      aoBtn.disabled = false;
+      namesBtn.setDisabled(false);
+      runBtn.setDisabled(false);
+      syncParts();
       syncPbr();
     }
+  }
+
+  const syncPbr = () => {
+    const e = session.engine;
+    const have = !!e?.pbr;
+    const intrinsicFree = pbrModeSel.value === 'intrinsic' || (pbrModeSel.value === 'auto' && providerSel.value === 'local');
+    const pbrCostNote = !e ? '' : intrinsicFree ? ' PBR: $0 local.' : ` PBR: ≤${money(pbrQuote(e.atlas.size).cost)}.`;
+
+    const labels = session.level?.labels.filter(Boolean) ?? [];
+    const currentPart = labels.includes(activePartSel.value) ? activePartSel.value : (labels[0] ?? '');
+    activePartSel.setItems(
+      labels.map((l) => ({ value: l, label: l })),
+      currentPart,
+    );
+    activePartSel.setDisabled(!labels.length);
+    presetSel.setDisabled(!labels.length);
+    suggestBtn.setDisabled(!labels.length);
+
+    const assignedPreset = e?.materialPresets[currentPart] ?? '';
+    presetSel.value = assignedPreset;
+    const preset = isMaterialPreset(assignedPreset) ? MATERIAL_PRESETS[assignedPreset] : undefined;
+    materialNote.textContent =
+      (preset
+        ? `Roughness ${preset.roughness.toFixed(2)}${preset.metalness ? ` · metal ${preset.metalness.toFixed(2)}` : ''} · relief ${(preset.heightMetres * 1000).toFixed(2)} mm.`
+        : 'Assign a physical preset without changing painted albedo.') + pbrCostNote;
+
+    const detail = session.viewer?.floorDetailState;
+    syncHiddenAgentState(floorDetailWrap, !detail?.available);
+    floorDetailChk.checked = !!detail?.enabled;
+    floorDetailChk.setDisabled(!!detail?.stale);
+
+    reliefSlider.setDisabled(!have && !detail?.enabled);
+    syncHiddenAgentState(pbrExportWrap, !have);
+    syncOutliner();
+    syncRunAvailability();
+    syncViewportHud();
   };
-  pbrBtn.onclick = async () => {
-    if (!session.engine) return;
-    key.value ? localStorage.setItem('trompe.falKey', key.value) : localStorage.removeItem('trompe.falKey');
-    configureFal(key.value || undefined);
-    const provCfg = syncProvider();
-    pbrBtn.disabled = runBtn.disabled = true;
+
+  const applyMaterials = async (assignments: MaterialAssignments) => {
+    const engine = session.engine;
+    presetSel.setDisabled(true);
+    suggestBtn.setDisabled(true);
     try {
-      say('reading the texture and geometry for relief, roughness, metallic and edge wear…');
-      const m = await session.makePbr({ mode: provCfg.provider === 'local' ? 'intrinsic' : 'auto' }, (done, total) => { pbrBtn.textContent = `Maps: tile ${done}/${total}…`; });
-      session.viewer?.setRelief(+relief.value);
-      if (session.record) vCost.textContent = money(session.record.cost + m.cost);
-      setMode('lit');
-      say(`maps: ${m.size} px from ${m.tiles} tile${m.tiles > 1 ? 's' : ''}, ${money(m.cost)}, ${Math.round(m.seconds)}s. Shown in the Lit display; move the sun to see them.`);
-      if (savedAs) { await session.saveRun(savedAs); say(`saved with runs/${savedAs}/`); }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (engine !== session.engine) return;
+      session.setMaterialPresets(assignments);
+      applyShading('lit');
+      if (savedAs) await session.saveRun(savedAs);
+      matFeedback.show(`Assigned ${Object.keys(assignments).length} surface presets.`, 'ok');
     } catch (e) {
-      say(String((e as Error)?.message ?? e));
+      matFeedback.show(String((e as Error).message), 'error');
     } finally {
-      pbrBtn.disabled = runBtn.disabled = false;
       syncPbr();
     }
   };
 
-  // Saved runs (dev server only): everything painted is on disk, and can be opened again without calling a model.
-  let savedAs: string | undefined;
-  const canSave = import.meta.env.DEV;
+  async function runBakeAo() {
+    if (!session.engine) return;
+    aoBtn.setDisabled(true);
+    matFeedback.show('Baking ambient occlusion…', 'info');
+    try {
+      const ao = await session.bakeAo({}, (done, total) => {
+        aoBtn.setText(`AO ${Math.round((100 * done) / Math.max(1, total))}%`);
+      });
+      applyShading('lit');
+      matFeedback.show(`Baked ${ao.size} px AO in ${ao.seconds.toFixed(1)}s.`, 'ok');
+      say(`ao: ${ao.size} px, ${ao.seconds.toFixed(1)}s`);
+      if (savedAs) await session.saveRun(savedAs);
+    } catch (e) {
+      matFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      aoBtn.setDisabled(false);
+      syncPbr();
+    }
+  }
+
+  async function runPbr() {
+    if (!session.engine) return;
+    apiKeyInput.value ? localStorage.setItem('trompe.falKey', apiKeyInput.value) : localStorage.removeItem('trompe.falKey');
+    configureFal(apiKeyInput.value || undefined);
+    const provCfg = syncProvider();
+    const chosenMode = pbrModeSel.value as 'auto' | 'intrinsic' | 'patina';
+    const effectiveMode = chosenMode === 'auto' && provCfg.provider === 'local' ? 'intrinsic' : chosenMode;
+    pbrBtn.setDisabled(true);
+    runBtn.setDisabled(true);
+    matFeedback.show('Building height, roughness, metallic and normal maps…', 'info');
+    try {
+      const m = await session.makePbr({ mode: effectiveMode }, (done, total) => {
+        pbrBtn.setText(`PBR ${done}/${total}…`);
+      });
+      session.viewer?.setRelief(reliefSlider.value);
+      if (session.record) vCost.textContent = money(session.record.cost + m.cost);
+      applyShading('lit');
+      const msg = `Built ${m.size} px PBR (${m.source?.kind ?? effectiveMode}, ${money(m.cost)}, ${m.seconds.toFixed(1)}s).`;
+      matFeedback.show(msg, 'ok');
+      statusBanner.show(msg, 'ok');
+      say(`pbr: ${m.size} px (${m.source?.kind ?? effectiveMode})`);
+      if (savedAs) await session.saveRun(savedAs);
+    } catch (e) {
+      matFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      pbrBtn.setDisabled(false);
+      runBtn.setDisabled(false);
+      syncPbr();
+    }
+  }
+
+  const renderCritique = (rep: CritiqueReport) => {
+    latestCritique = rep;
+    criticEmpty.hidden = true;
+    criticStats.hidden = false;
+    criticPill.textContent = rep.verdict === 'pass' ? `Pass · ${rep.score}` : `Repair · ${rep.score}`;
+    criticPill.className = `pill ${rep.verdict === 'pass' ? 'pass' : 'warn'}`;
+    vCScore.textContent = `${rep.score}`;
+    vCSeen.textContent = `${Math.round(100 * rep.metrics.seenPainted)}%`;
+    vCPx.textContent = `${rep.metrics.highRankPxPerM}`;
+    vCSeam.textContent = `${rep.metrics.seam.ratio.toFixed(2)}×`;
+
+    criticChips.replaceChildren(
+      ...rep.defectRegions
+        .filter((d) => d.diagnosticCamera)
+        .map((d, idx) => {
+          const chip = makeButton(`Defect ${idx + 1} · ${d.part}`, () => {
+            const v = session.viewer;
+            const cam = d.diagnosticCamera;
+            if (!v || !cam) return;
+            if (v.walker) {
+              v.stopWalk();
+              walkToggle.setPressed(false);
+              hint.classList.remove('show');
+            }
+            v.camera.position.set(...cam.position);
+            v.controls.target.set(...cam.target);
+            v.controls.update();
+            v.dirty = true;
+            applyShading('textured');
+          });
+          return chip.root;
+        }),
+    );
+
+    syncHiddenAgentState(repairRunBtn.root, rep.actions.length === 0);
+    if (rep.actions.length > 0) {
+      const summary = rep.actions.map((act) => `${act.op}: ${act.reason}`).join(' · ');
+      criticFeedback.show(summary, rep.verdict === 'pass' ? 'ok' : 'info');
+      statusBanner.show(`Critic ${rep.score}/100 — ${summary}`, rep.verdict === 'pass' ? 'ok' : 'info');
+    } else {
+      const okMsg = `Critic ${rep.score}/100 (pass): seen ${(100 * rep.metrics.seenPainted).toFixed(1)}%, consistency ${(100 * rep.metrics.multiView.consistency).toFixed(0)}%.`;
+      criticFeedback.show(okMsg, 'ok');
+      statusBanner.show(okMsg, 'ok');
+    }
+  };
+
+  const resetCriticUi = () => {
+    latestCritique = null;
+    criticStats.hidden = true;
+    criticChips.replaceChildren();
+    syncHiddenAgentState(repairRunBtn.root, true);
+    criticPill.textContent = 'Not scored';
+    criticPill.className = 'pill';
+    criticFeedback.show('');
+    syncRunAvailability();
+  };
+
+  async function runCritique() {
+    const a = getApi();
+    if (!session.record || !a) {
+      criticFeedback.show('Paint a scene or load a saved take first.', 'error');
+      return;
+    }
+    inspectorTabs.value = 'critic';
+    critiqueBtn.setDisabled(true);
+    criticFeedback.show('Scoring coverage, sightline px/m, seams and shading…', 'info');
+    try {
+      const rep = await a.critique({ screenshots: 1 });
+      renderCritique(rep);
+      say(`critique: ${rep.score}/100 (${rep.verdict})`);
+    } catch (e) {
+      criticFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      syncRunAvailability();
+    }
+  }
+
+  async function runPrescribedRepairs() {
+    const a = getApi();
+    if (!latestCritique || !session.record || !a) return;
+    apiKeyInput.value ? localStorage.setItem('trompe.falKey', apiKeyInput.value) : localStorage.removeItem('trompe.falKey');
+    configureFal(apiKeyInput.value || undefined);
+    const provCfg = syncProvider();
+    repairRunBtn.setDisabled(true);
+    critiqueBtn.setDisabled(true);
+    runBtn.setDisabled(true);
+    isRunning = true;
+    stopBtn.setDisabled(false);
+    criticFeedback.show('Running Critic-prescribed repairs…', 'info');
+    try {
+      for (const act of latestCritique.actions) {
+        if (act.op === 'consolidate') {
+          await a.consolidate(act.params);
+        } else if (act.op === 'topUp') {
+          await a.topUp(
+            {
+              style: styleArea.value,
+              roofStyle: roofInput.value,
+              floorStyle: floorInput.value,
+              firstModel: firstModelSel.value,
+              fillModel: fillModelSel.value,
+              check: samChk.checked,
+              checkPlanes: mogeChk.checked,
+              provider: provCfg.provider,
+              providerFallback: provCfg.providerFallback,
+              localBackend: provCfg.localBackend,
+              localUrl: provCfg.localUrl,
+              plan: act.params.plan as PipelineOptions['plan'],
+            },
+            undefined,
+            savedAs,
+          );
+        } else if (act.op === 'repair') {
+          await a.repair(
+            act.params.regions as { min: [number, number, number]; max: [number, number, number]; text?: string }[],
+            undefined,
+            savedAs,
+          );
+        } else if (act.op === 'parts') {
+          await a.parts(act.params as { only?: string[]; max?: number }, undefined, savedAs);
+        } else if (act.op === 'uvRefine') {
+          await a.uvRefine(act.params);
+        }
+      }
+      if (savedAs) await session.saveRun(savedAs);
+      const rep = await a.critique({ screenshots: 1 });
+      renderCritique(rep);
+      applyShading('textured');
+    } catch (e) {
+      criticFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      isRunning = false;
+      stopBtn.setDisabled(true);
+      repairRunBtn.setDisabled(false);
+      runBtn.setDisabled(false);
+      syncPbr();
+    }
+  }
+
+  async function runConsolidate() {
+    if (!session.record) return;
+    consolidateBtn.setDisabled(true);
+    criticFeedback.show('Solving tangent flow & Screened-Poisson stitching…', 'info');
+    try {
+      const r = await session.consolidate();
+      const msg = `Stitched ${r.views} views (${r.seconds.toFixed(2)}s): seam ${r.before.ratio.toFixed(2)} → ${r.after.ratio.toFixed(2)}.`;
+      criticFeedback.show(msg, 'ok');
+      statusBanner.show(msg, 'ok');
+      say(`consolidated ${r.views}v: ${r.before.ratio.toFixed(2)} → ${r.after.ratio.toFixed(2)}`);
+      if (savedAs) await session.saveRun(savedAs);
+    } catch (e) {
+      criticFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      syncRunAvailability();
+      syncPbr();
+    }
+  }
+
+  async function runUvRefine() {
+    if (!session.record) return;
+    uvRefineBtn.setDisabled(true);
+    criticFeedback.show('Inpainting UV seams & removing baked shading…', 'info');
+    try {
+      const r = await session.uvRefine();
+      const msg = `Refined UVs (${r.seconds.toFixed(2)}s): unpainted ${(100 * r.unpaintedBefore).toFixed(1)}% → ${(100 * r.unpaintedAfter).toFixed(1)}%.`;
+      criticFeedback.show(msg, 'ok');
+      statusBanner.show(msg, 'ok');
+      say(`uvRefine: ${(100 * r.unpaintedBefore).toFixed(1)}% → ${(100 * r.unpaintedAfter).toFixed(1)}%`);
+      if (savedAs) await session.saveRun(savedAs);
+    } catch (e) {
+      criticFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      syncRunAvailability();
+      syncPbr();
+    }
+  }
+
   const listRuns = async () => {
     if (!canSave) return;
     try {
       const runs = (await (await fetch('/api/runs')).json()) as { id: string; level: string; views: number; cost: number; partial: boolean }[];
-      // the scripts name a level after its file, the samples here are capitalised: same level either way
       const mine = runs.filter((r) => r.level.toLowerCase() === session.level?.name.toLowerCase());
-      runSel.replaceChildren(...mine.map((r) => h('option', { value: r.id }, `${r.id} · ${r.views} views · ${money(r.cost)}${r.partial ? ' · unfinished' : ''}`)));
-      runsSection.style.display = mine.length ? '' : 'none';
-    } catch { runsSection.style.display = 'none'; }
+      savedRunSel.setItems(
+        mine.map((r) => ({ value: r.id, label: `${r.id} · ${r.views}v · ${money(r.cost)}` })),
+        mine[0]?.id ?? '',
+      );
+      runCountMeta.textContent = String(mine.length);
+      syncHiddenAgentState(runsRow, mine.length === 0);
+      runsEmptyNote.hidden = mine.length > 0;
+    } catch {
+      runCountMeta.textContent = '0';
+      syncHiddenAgentState(runsRow, true);
+      runsEmptyNote.hidden = false;
+    }
   };
-  runBtnLoad.onclick = async () => {
-    if (!runSel.value || !session.engine) return;
-    runBtnLoad.disabled = runBtn.disabled = true;
+
+  async function runLoadSaved() {
+    if (!savedRunSel.value || !session.engine) return;
+    loadRunBtn.setDisabled(true);
+    runBtn.setDisabled(true);
     try {
-      say(`loading run ${runSel.value}…`);
-      const meta = await session.loadRun(runSel.value);
-      savedAs = runSel.value;
-      style.value = meta.options.style;
-      if (meta.options.roofStyle) roofStyle.value = meta.options.roofStyle;
-      if (meta.options.floorStyle) floorStyle.value = meta.options.floorStyle;
+      const meta = await session.loadRun(savedRunSel.value);
+      savedAs = savedRunSel.value;
+      styleArea.value = meta.options.style;
+      if (meta.options.roofStyle) roofInput.value = meta.options.roofStyle;
+      if (meta.options.floorStyle) floorInput.value = meta.options.floorStyle;
       vViews.textContent = String(meta.views.length);
       vCov.textContent = `${Math.round(100 * (meta.views.at(-1)?.predicted ?? 0))}%`;
       vCost.textContent = money(meta.cost + (meta.pbr?.cost ?? 0));
       vTime.textContent = `${Math.round(meta.seconds)}s`;
       syncParts();
-      setMode(session.engine.pbr || session.viewer?.floorDetailState.enabled ? 'lit' : 'textured');
-      say(`run ${runSel.value}: ${meta.views.length} views, ${money(meta.cost)}${meta.partial ? ' (unfinished: continue it with scripts/texture.mjs --resume)' : ''}` +
-        (meta.viewSize && session.engine && meta.viewSize > session.engine.size ? `. It was painted with ${meta.viewSize} px views; pick 2K views above to see it at full detail` : '') +
-        (meta.mapsSkipped ? '. Its maps were made on another texture layout and were left out; switch the layout above to see them, or make them again.' : '') +
-        (meta.floorDetailSkipped ? `. Floor detail was left off: ${meta.floorDetailSkipped}` : ''));
+      resetCriticUi();
+      applyShading(session.engine.pbr || session.viewer?.floorDetailState.enabled ? 'lit' : 'textured');
+      statusBanner.show(`Loaded ${savedRunSel.value} (${meta.views.length} views).`, 'ok');
+      say(`loaded ${savedRunSel.value}`);
     } catch (e) {
-      say(String((e as Error)?.message ?? e));
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
     } finally {
-      runBtnLoad.disabled = runBtn.disabled = false;
+      loadRunBtn.setDisabled(false);
+      runBtn.setDisabled(false);
       syncPbr();
     }
+  }
+
+  const syncModeUi = () => {
+    const isObj = targetModeSel.value === 'object' || (targetModeSel.value === 'auto' && session.level?.mode === 'object');
+    syncHiddenAgentState(focusPartsInput.wrap, !isObj);
   };
 
-  async function load(src: string | ArrayBuffer, name: string, lighting: string, area?: number[]) {
-    say(`loading ${name}…`);
-    const prepared = SAMPLES.find(s => s.url === src)?.preset === 'sento-floor';
-    atlasSel.disabled = layoutSel.disabled = prepared;
-    atlasSel.title = layoutSel.title = prepared ? 'The prepared Sento floor keeps its reviewed texture and UV layout.' : '';
-    if (prepared) { atlasSel.value = '2048'; layoutSel.value = 'file'; }
-    const info = prepared ? await session.loadSentoFloor(+viewSel.value) :
-      await session.load(src, name, LIGHTING[lighting], +atlasSel.value, +viewSel.value, layoutSel.value as 'file' | 'seen' | 'near', area, 1, 'auto', 0, false, modeSel.value as 'auto' | 'level' | 'object');
+  async function loadScene(src: string | ArrayBuffer, name: string, lighting: string, area?: number[]) {
+    statusBanner.show(`Loading ${name}…`, 'info');
+    const prepared = SAMPLES.find((s) => s.url === src)?.preset === 'sento-floor';
+    atlasSel.setDisabled(prepared);
+    uvLayoutSel.setDisabled(prepared);
+    if (prepared) {
+      atlasSel.value = '2048';
+      uvLayoutSel.value = 'file';
+    }
+    const chosenLayout = uvLayoutSel.value as 'file' | 'seen' | 'near';
+    const useWeights = !prepared && weightsChk.checked;
+    const cavity = useWeights && chosenLayout !== 'file' ? 0.5 : 0;
+    const info = prepared
+      ? await session.loadSentoFloor(+viewResSel.value)
+      : await session.load(
+          src,
+          name,
+          LIGHTING[lighting] ?? LIGHTING.outdoor,
+          +atlasSel.value,
+          +viewResSel.value,
+          chosenLayout,
+          area,
+          1,
+          'auto',
+          cavity,
+          useWeights,
+          targetModeSel.value as 'auto' | 'level' | 'object',
+          useWeights,
+        );
     setLighting(lighting);
-    setMode(prepared ? 'lit' : 'clay');
-    walking(false);
+    applyShading(prepared ? 'lit' : 'clay');
+    walkToggle.setPressed(false);
+    hint.classList.remove('show');
     savedAs = undefined;
+    stageSees.classList.remove('filled');
+    stagePaints.classList.remove('filled');
     for (const b of [vViews, vCov, vCost, vTime]) b.textContent = '–';
+    matFeedback.show('');
+    resetCriticUi();
+    syncModeUi();
     syncPbr();
     syncParts();
     void listRuns();
     const l = info.layout;
     const u = 'unwrap' in info ? info.unwrap : undefined;
-    say(`${name}${info.mode === 'object' ? ' (object mode)' : ''}: ${info.triangles.toLocaleString()} triangles, ${info.area.toLocaleString()} m² of surface` +
-      (u ? `. Its UVs were made from scratch (${u.reason}): ${u.charts.toLocaleString()} charts filling ${Math.round(100 * u.fill)}% of the texture` : '') +
-      (!l ? '' : l.applied ? `. Players can see ${Math.round(100 * l.seenSurface)}% of it; laid out again, those faces get ${l.gain.toFixed(2)}× the texels along each side.`
-        : `. Laying the texture out by what players see would gain only ${l.gain.toFixed(2)}×, so the level's own UVs are kept.`));
+    geoMeta.textContent = `${info.triangles.toLocaleString()}t · ${Math.round(info.area).toLocaleString()}m²`;
+    const summary =
+      `${name}${info.mode === 'object' ? ' (object)' : ''}: ${info.triangles.toLocaleString()} tris, ${info.area.toLocaleString()} m²` +
+      (u ? ` · xatlas ${u.charts} charts` : '') +
+      (l?.applied ? ` · ${l.gain.toFixed(2)}× density` : '');
+    statusBanner.show(summary, 'info');
+    say(summary);
   }
-  atlasSel.onchange = viewSel.onchange = layoutSel.onchange = modeSel.onchange = () => sample.onchange?.(new Event('change'));
-  sample.onchange = () => {
-    const s = SAMPLES.find((x) => x.url === sample.value)!;
-    style.value = s.style;
-    roofStyle.value = s.roofStyle ?? DEFAULT_PIPELINE.roofStyle;
-    floorStyle.value = s.floorStyle ?? DEFAULT_PIPELINE.floorStyle;
-    void load(s.url, s.name, s.lighting, s.area).catch((e) => say(String(e)));
+
+  let loadingSeq = 0;
+  let currentLoad: Promise<void> = Promise.resolve();
+  function onSampleChanged() {
+    const s = SAMPLES.find((x) => x.url === sampleSel.value) ?? SAMPLES[0];
+    styleArea.value = s.style;
+    roofInput.value = s.roofStyle ?? DEFAULT_PIPELINE.roofStyle;
+    floorInput.value = s.floorStyle ?? DEFAULT_PIPELINE.floorStyle;
+    const seq = ++loadingSeq;
+    currentLoad = loadScene(s.url, s.name, s.lighting, s.area).catch((e) => {
+      if (seq === loadingSeq) statusBanner.show(String((e as Error)?.message ?? e), 'error');
+    });
+  }
+
+  const handleFiles = async (files: File[]) => {
+    const f = files[0];
+    if (!f) return;
+    currentLoad = loadScene(await f.arrayBuffer(), f.name.replace(/\.\w+$/, ''), skySeg.value);
+    await currentLoad;
   };
-  drop.onclick = () => file.click();
-  const loadFile = async (f: File) => load(await f.arrayBuffer(), f.name.replace(/\.\w+$/, ''), lightingKey());
-  file.onchange = () => { if (file.files?.[0]) void loadFile(file.files[0]).catch((e) => say(String(e))); };
-  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
-  drop.ondragleave = () => drop.classList.remove('over');
-  drop.ondrop = (e) => {
-    e.preventDefault();
-    drop.classList.remove('over');
-    const f = e.dataTransfer?.files?.[0];
-    if (f) void loadFile(f).catch((err) => say(String(err)));
-  };
+  importPicker.addEventListener('valuechange', (ev) => {
+    void handleFiles(ev.detail.value).catch((e) => statusBanner.show(String((e as Error)?.message ?? e), 'error'));
+  });
+  dropPicker.addEventListener('valuechange', (ev) => {
+    void handleFiles(ev.detail.value).catch((e) => statusBanner.show(String((e as Error)?.message ?? e), 'error'));
+  });
 
   const planOpts = () => {
-    const obj = modeSel.value === 'object' || (modeSel.value === 'auto' && session.level?.mode === 'object');
+    const obj = targetModeSel.value === 'object' || (targetModeSel.value === 'auto' && session.level?.mode === 'object');
+    const focusParts = focusPartsInput.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     return {
-      maxViews: +budget.value,
-      adaptive: adaptiveBox.checked,
-      mode: modeSel.value as 'auto' | 'level' | 'object',
-      aerial: !obj && aerialBox.checked ? 8 : 0,
-      roofs: !obj && aerialBox.checked ? 24 : 0,
-      floors: !obj && floorBox.checked ? 24 : 0,
+      maxViews: Math.round(budgetSlider.value),
+      adaptive: adaptiveChk.checked,
+      mode: targetModeSel.value as 'auto' | 'level' | 'object',
+      aerial: !obj && aerialChk.checked ? 8 : 0,
+      roofs: !obj && aerialChk.checked ? 24 : 0,
+      floors: !obj && floorChk.checked ? 24 : 0,
       holes: obj ? 0 : 12,
+      ...(obj && focusParts.length ? { focusParts } : {}),
     };
   };
-  planBtn.onclick = () => {
+
+  async function runPlan() {
     try {
-      const p = session.makePlan(planOpts());
-      // the quote, before anything is spent: the most these views can cost and about how long they take
+      await currentLoad;
+      const opts = planOpts();
+      const p = session.makePlan(opts);
       const provCfg = syncProvider();
-      const q = quote(p, { firstModel: firstSel.value, fillModel: fillSel.value, holes: planOpts().holes,
-        secondGoes: checkBox.checked ? DEFAULT_PIPELINE.checkRetries : 0, planes: checkBox.checked && planesBox.checked,
-        viewSize: session.engine?.size, provider: provCfg.provider, providerFallback: provCfg.providerFallback });
+      const q = quote(p, {
+        firstModel: firstModelSel.value,
+        fillModel: fillModelSel.value,
+        holes: opts.holes,
+        secondGoes: samChk.checked ? DEFAULT_PIPELINE.checkRetries : 0,
+        planes: samChk.checked && mogeChk.checked,
+        viewSize: session.engine?.size,
+        provider: provCfg.provider,
+        providerFallback: provCfg.providerFallback,
+      });
       vViews.textContent = String(p.views.length);
-      vCov.textContent = `${Math.round(100 * p.predicted[p.predicted.length - 1])}%`;
+      vCov.textContent = `${Math.round(100 * (p.predicted[p.predicted.length - 1] ?? 0))}%`;
       vCost.textContent = `≤${money(q.cost)}`;
       vTime.textContent = `~${Math.max(1, Math.round(q.seconds / 60))}m`;
-      say(`planned ${p.views.length} views from ${p.points.length} spots, ${p.waves.length} waves, ` +
-        `${Math.round(100 * (p.predicted[p.predicted.length - 1] ?? 0))}% of reachable surface. ` +
-        (p.texture ? `Players' cameras can see ${Math.round(100 * p.texture.seen)}% of the texture` +
-          (p.texture.seen < 0.5 ? '; the rest of its resolution goes to faces nobody sees. ' : '. ') : '') +
-        (p.budget ? `Adaptive (${p.budget.rounds} rounds, ${p.budget.probedCandidates} probes): knee at ${p.budget.recommendedViews} views, limit is ${p.budget.bottleneck}, ${p.budget.sparseHeightTiles.active}/${p.budget.sparseHeightTiles.total} PBR tiles hold important surface. ` : '') +
-        `At most ${money(q.cost)} and about ${Math.max(1, Math.round(q.seconds / 60))} min, counting up to ${planOpts().holes} views for holes` +
-        (q.again ? ` and ${money(q.again)} for second goes at whatever the blockout check holds back (only the views that need one)` : '') +
-        (q.planes ? `, and ${money(q.planes)} for the plane check.` : '.'));
-    } catch (e) { say(String(e)); }
-  };
-  runBtn.onclick = async () => {
-    key.value ? localStorage.setItem('trompe.falKey', key.value) : localStorage.removeItem('trompe.falKey');
-    configureFal(key.value || undefined);
-    runBtn.disabled = planBtn.disabled = true;
+      const knee = p.budget ? ` · knee ${p.budget.recommendedViews}v` : '';
+      statusBanner.show(`Planned ${p.views.length} cameras (${vCov.textContent}, ≤${money(q.cost)}${knee}).`, 'ok');
+      syncViewportHud();
+      say(`planned ${p.views.length} cameras, ≤${money(q.cost)}${knee}`);
+    } catch (e) {
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
+    }
+  }
+
+  async function runPaint() {
+    await currentLoad;
+    apiKeyInput.value ? localStorage.setItem('trompe.falKey', apiKeyInput.value) : localStorage.removeItem('trompe.falKey');
+    configureFal(apiKeyInput.value || undefined);
+    isRunning = true;
+    runBtn.setDisabled(true);
+    planBtn.setDisabled(true);
+    stopBtn.setDisabled(false);
+    syncRunAvailability();
     const S = session.engine?.size ?? 1024;
     let n = 0;
     const onEvent = (e: PipelineEvent) => {
-      if (e.type === 'planned') { vViews.textContent = `0/${e.plan.views.length}`; say(`painting ${e.plan.views.length} views in ${e.plan.waves.length} waves`); }
+      if (e.type === 'planned') {
+        vViews.textContent = `0/${e.plan.views.length}`;
+        statusBanner.show(`Painting ${e.plan.views.length} views across ${e.plan.waves.length} waves…`, 'info');
+        syncViewportHud();
+      }
       if (e.type === 'check') say(e.message);
-      if (e.type === 'parts') { say(e.message); if (e.names) syncParts(); }
-      if (e.type === 'view-start') drawThumb(thumbSees, e.state, S);
+      if (e.type === 'parts') {
+        say(e.message);
+        if (e.names) syncParts();
+      }
+      if (e.type === 'view-start') drawThumb(stageSees, thumbSees, e.state, S);
       if (e.type === 'view-done') {
-        drawThumb(thumbPaints, e.view.gen, S);
+        drawThumb(stagePaints, thumbPaints, e.view.gen, S);
         vViews.textContent = `${++n}/${session.plan?.views.length ?? '?'}`;
         vCov.textContent = `${Math.round(100 * e.view.predicted)}%`;
         vCost.textContent = `$${e.cost.toFixed(2)}`;
         vTime.textContent = `${Math.round(e.elapsed)}s`;
-        say(`view ${e.view.index} · ${e.view.model} · ${e.view.seconds.toFixed(1)}s` +
-          (e.view.spec.again ? ' · second go' : '') + (e.view.swatches ? ' · with material samples' : '') + (e.view.ignored ? ` · ${Math.round(100 * e.view.ignored)}% painted over the blockout, held back` : ''));
+        syncViewportHud();
+        say(`view ${e.view.index} · ${e.view.model} · ${e.view.seconds.toFixed(1)}s`);
       }
-      if (e.type === 'error') say(/abort/i.test(e.message) ? `view ${e.index} stopped` : `view ${e.index} failed: ${e.message}`);
-      if (e.type === 'done') say(`done: ${e.record.views.length} views, $${e.record.cost.toFixed(2)}, ${Math.round(e.record.seconds)}s`);
+      if (e.type === 'error') {
+        const msg = /abort/i.test(e.message) ? `Stopped at view ${e.index}.` : `View ${e.index} failed: ${e.message}`;
+        statusBanner.show(msg, /abort/i.test(e.message) ? 'info' : 'error');
+        say(msg);
+      }
+      if (e.type === 'done') {
+        statusBanner.show(`Painted ${e.record.views.length} views (${money(e.record.cost)}, ${Math.round(e.record.seconds)}s).`, 'ok');
+        say(`done: ${e.record.views.length}v, ${money(e.record.cost)}`);
+      }
     };
     savedAs = canSave ? `${session.level!.name.replace(/[^\w.-]+/g, '-')}-${Date.now().toString(36)}` : undefined;
-    if (savedAs) say(`saving to runs/${savedAs}/ as it paints`);
     const provCfg = syncProvider();
     try {
-      await session.run({ style: style.value, roofStyle: roofStyle.value, floorStyle: floorStyle.value, firstModel: firstSel.value, fillModel: fillSel.value,
-        ...(SAMPLES.find((x) => x.url === sample.value && x.name === session.level?.name)?.look ?? {}),
-        check: checkBox.checked, checkPlanes: planesBox.checked, styleReference: swatchBox.checked, plan: planOpts(),
-        provider: provCfg.provider, providerFallback: provCfg.providerFallback, localUrl: provCfg.localUrl }, onEvent, savedAs);
-      setMode('textured');
+      await session.run(
+        {
+          style: styleArea.value,
+          roofStyle: roofInput.value,
+          floorStyle: floorInput.value,
+          firstModel: firstModelSel.value,
+          fillModel: fillModelSel.value,
+          ...(SAMPLES.find((x) => x.url === sampleSel.value && x.name === session.level?.name)?.look ?? {}),
+          nameParts: provCfg.provider !== 'local',
+          check: samChk.checked && provCfg.provider !== 'local',
+          checkPlanes: mogeChk.checked && provCfg.provider !== 'local',
+          styleReference: swatchChk.checked,
+          plan: planOpts(),
+          provider: provCfg.provider,
+          providerFallback: provCfg.providerFallback,
+          localBackend: provCfg.localBackend,
+          localUrl: provCfg.localUrl,
+        },
+        onEvent,
+        savedAs,
+      );
+      applyShading('textured');
     } catch (e) {
-      say(String(e));
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
     } finally {
-      runBtn.disabled = planBtn.disabled = false;
+      isRunning = false;
+      runBtn.setDisabled(false);
+      planBtn.setDisabled(false);
+      stopBtn.setDisabled(true);
       syncPbr();
       void listRuns();
     }
-  };
-  stopBtn.onclick = () => session.stop();
-  consolidateBtn.onclick = async () => {
-    if (!session.record) { say('paint or load a run first'); return; }
-    consolidateBtn.disabled = true;
-    try {
-      const r = await session.consolidate();
-      say(`consolidated ${r.views} views (${r.flowAdvected} registered by tangent flow) in ${r.seconds}s: seam step ${r.before.step.toFixed(1)} → ${r.after.step.toFixed(1)} RGB (ratio ${r.before.ratio.toFixed(2)} → ${r.after.ratio.toFixed(2)})`);
-      if (savedAs) { await session.saveRun(savedAs); say(`saved with runs/${savedAs}/`); }
-    } catch (e) {
-      say(String((e as Error)?.message ?? e));
-    } finally {
-      consolidateBtn.disabled = false;
-      syncPbr();
-    }
-  };
-  uvRefineBtn.onclick = async () => {
-    if (!session.record) { say('paint or load a run first'); return; }
-    uvRefineBtn.disabled = true;
-    try {
-      const r = await session.uvRefine();
-      say(`UV refine (${r.seconds}s, ${r.crossSeamLinks} 3D seam links): unpainted ${(100 * r.unpaintedBefore).toFixed(1)}% → ${(100 * r.unpaintedAfter).toFixed(1)}%, baked shading r=${r.bakedShadingBefore.correlation.toFixed(2)} → ${r.bakedShadingAfter.correlation.toFixed(2)}`);
-      if (savedAs) { await session.saveRun(savedAs); say(`saved with runs/${savedAs}/`); }
-    } catch (e) {
-      say(String((e as Error)?.message ?? e));
-    } finally {
-      uvRefineBtn.disabled = false;
-      syncPbr();
-    }
-  };
+  }
+
   const download = (blob: Blob, name: string) => {
-    const a = h('a', { href: URL.createObjectURL(blob), download: name });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    const link = el<HTMLAnchorElement>('a', { href: URL.createObjectURL(blob), download: name });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
   };
-  glbBtn.onclick = async () => {
+
+  async function runExportGlb() {
     if (!session.engine) return;
-    download(new Blob([await session.exportGlb()], { type: 'model/gltf-binary' }), `${session.level!.name}_textured.glb`);
-  };
-  texDl.onclick = async () => {
+    glbBtn.setDisabled(true);
+    try {
+      const glb = await session.exportGlb();
+      download(new Blob([glb], { type: 'model/gltf-binary' }), `${session.level!.name}_textured.glb`);
+      statusBanner.show(`Exported ${session.level!.name}_textured.glb (${(glb.byteLength / (1024 * 1024)).toFixed(2)} MiB).`, 'ok');
+    } catch (e) {
+      statusBanner.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      glbBtn.setDisabled(false);
+    }
+  }
+
+  function exportAlbedoPng() {
     if (!session.engine) return;
     const atlas = session.engine.atlas;
-    const { data, size } = atlas.readBytes([0.5, 0.5, 0.5], Math.min(atlas.size, 8192));   // several textures: side by side, as one picture
-    const c = h('canvas');
+    const { data, size } = atlas.readBytes([0.5, 0.5, 0.5], Math.min(atlas.size, 8192));
+    const c = document.createElement('canvas');
     c.width = c.height = size;
     c.getContext('2d')!.putImageData(new ImageData(data as Uint8ClampedArray<ArrayBuffer>, size, size), 0, 0);
-    c.toBlob((b) => b && download(b, `${session.level!.name}_texture.png`), 'image/png');
-  };
-  mapsDl.onclick = () => {
+    c.toBlob((b) => {
+      if (b) {
+        download(b, `${session.level!.name}_albedo.png`);
+        matFeedback.show(`Saved ${size} px albedo PNG.`, 'ok');
+      }
+    }, 'image/png');
+  }
+
+  function exportPbrPngs() {
     if (!session.engine?.pbr) return;
     const ch = session.exportPbrChannels();
-    const maps: [Uint8ClampedArray, string][] = [
-      [ch.normal, 'normal'],
-      [ch.orm, 'orm'],
-      [ch.roughness, 'roughness'],
-      [ch.metalness, 'metalness'],
-      [ch.occlusion, 'occlusion'],
-      [ch.height, 'height'],
-    ];
+    const fmt = channelFmtSel.value as 'both' | 'orm' | 'separate';
+    const maps: [Uint8ClampedArray, string][] = [];
+    if (fmt === 'orm' || fmt === 'both') maps.push([ch.normal, 'normal'], [ch.orm, 'orm']);
+    if (fmt === 'separate' || fmt === 'both') {
+      if (fmt === 'separate') maps.push([ch.normal, 'normal']);
+      maps.push([ch.roughness, 'roughness'], [ch.metalness, 'metalness'], [ch.occlusion, 'occlusion'], [ch.height, 'height']);
+    }
     for (const [data, name] of maps) {
-      const c = h('canvas');
+      const c = document.createElement('canvas');
       c.width = c.height = ch.size;
       c.getContext('2d')!.putImageData(new ImageData(data as Uint8ClampedArray<ArrayBuffer>, ch.size, ch.size), 0, 0);
       c.toBlob((b) => b && download(b, `${session.level!.name}_${name}.png`), 'image/png');
     }
-  };
+    matFeedback.show(`Saved ${maps.length} PBR PNGs (${ch.size} px).`, 'ok');
+  }
 
   setLighting(SAMPLES[0].lighting);
-  sample.value = new URLSearchParams(location.search).get('sample') === 'sento' ? 'preset:sento-floor' : '/samples/village.glb';
-  sample.onchange?.(new Event('change'));
+  const initialSample = new URLSearchParams(location.search).get('sample') === 'sento' ? 'preset:sento-floor' : '/samples/village.glb';
+  sampleSel.value = initialSample;
+  onSampleChanged();
 }
