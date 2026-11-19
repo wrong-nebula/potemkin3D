@@ -6,6 +6,23 @@ import { z } from 'zod';
 import { ROOT, AutomationError, inside, readJSON, atomicJSON, inspectGlb } from './files.mjs';
 import { object, id, jobId, relativePath, localUrl } from './schema.mjs';
 import { startJob, getJob, terminal } from './jobs.mjs';
+import { formatAgentSessionMarkdown, renderStandaloneReportHtml, writeRunReportFiles } from './words.mjs';
+
+function writeSessionReportFiles(session, root = ROOT) {
+  try {
+    const dir = path.join(inside(root, '.potemkin/sessions', { exists: false }), session.id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const md = formatAgentSessionMarkdown(session);
+    const html = renderStandaloneReportHtml({
+      title: `Session ${session.id}`,
+      subtitle: `Run ${session.runId} · ${session.status}`,
+      markdown: md,
+      incomplete: session.status !== 'completed',
+    });
+    fs.writeFileSync(path.join(dir, 'report.md'), md, { mode: 0o600 });
+    fs.writeFileSync(path.join(dir, 'report.html'), html, { mode: 0o600 });
+  } catch {}
+}
 
 /**
  * Budgeted Planner → Actor → Critic loop over CLI/MCP (TODO item 10):
@@ -468,6 +485,7 @@ export function agentPlan(input, { root = ROOT } = {}) {
     mode: resolvedMode,
     objectBrief,
   }, root);
+  writeSessionReportFiles(session, root);
 
   return {
     sessionId,
@@ -828,6 +846,8 @@ export async function agentAct(input, { root = ROOT } = {}) {
 
   session.updatedAt = new Date().toISOString();
   atomicJSON(file, session);
+  writeSessionReportFiles(session, root);
+  const runReport = writeRunReportFiles(session.runId, { root, critique });
 
   return {
     sessionId: session.id,
@@ -838,6 +858,7 @@ export async function agentAct(input, { root = ROOT } = {}) {
     coverageBudget: session.coverageBudget,
     budget: session.budget,
     critique,
+    ...(runReport ? { reportPath: runReport.htmlPath, reportMarkdownPath: runReport.markdownPath } : {}),
     ...(session.pendingProposal ? {
       pendingProposal: {
         id: session.pendingProposal.id,
@@ -894,7 +915,14 @@ export async function agentCritique(input, { root = ROOT } = {}) {
   }
   let critique = job.results?.find((r) => r.op === 'critique')?.result;
   if (critique?.summary && critique?.path) critique = readJSON(inside(root, critique.path));
-  return { runId, jobId: started.id, critique, artifacts: job.artifacts ?? [] };
+  const runReport = writeRunReportFiles(runId, { root, critique });
+  return {
+    runId,
+    jobId: started.id,
+    critique,
+    artifacts: job.artifacts ?? [],
+    ...(runReport ? { reportPath: runReport.htmlPath, reportMarkdownPath: runReport.markdownPath } : {}),
+  };
 }
 
 export function agentStatus({ sessionId }, { root = ROOT } = {}) {

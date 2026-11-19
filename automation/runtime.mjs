@@ -50,7 +50,7 @@ export async function executeJob(kind,input,ctx) {
       await page.goto(`http://127.0.0.1:${native.address().port}/${input.scene==='luxor'?'luxor/':''}?res=0.75&ratio=1&tex=4k&maps=4k`);
       await page.waitForFunction(()=>!!(window.luxorView?.ready()||window.demo),null,{timeout:90000});
       if(input.scene==='luxor')await page.keyboard.press(String(input.preset));
-      if(!input.hud)await page.evaluate(()=>{for(const el of document.querySelectorAll('#hud,.potemkin-menu-trigger'))el.style.display='none';});
+      if(!input.hud)await page.evaluate(()=>{for(const el of document.querySelectorAll('#hud,.potemkin-menu-trigger,.potemkin-notes-ui'))el.style.display='none';});
       await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       if(errors.length)throw new AutomationError('VIEWER_ERROR',errors.join('; '));
       return [ctx.artifact(`${input.scene}.png`,await page.screenshot(), 'image/png')];

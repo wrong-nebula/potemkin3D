@@ -41,8 +41,12 @@ try {
   await connect();
   const listed=await client.listTools();assert(listed.tools.some(t=>t.name==='potemkin_job_start'));
   assert(listed.tools.some(t=>t.name==='potemkin_agent_plan'));
-  assert.equal(listed.tools.length,20);
+  assert(listed.tools.some(t=>t.name==='potemkin_report'));
+  assert(listed.tools.some(t=>t.name==='potemkin_doc'));
+  assert.equal(listed.tools.length,23);
   assert((await call('catalog')).samples.some(s=>s.name==='luxor'));
+  assert((await call('docs')).docs.some(d=>d.id==='engine'));
+  assert((await client.readResource({uri:'potemkin://docs/engine'})).contents[0].text.includes('Potemkin'));
   assert((await call('inspect',{path:'samples/luxor.glb'})).primitivesWithUVs>0);
   assert((await call('schema')).schema.properties.steps);
   assert((await client.readResource({uri:'potemkin://tutorial'})).contents[0].text.includes('Luxor'));
@@ -58,6 +62,9 @@ try {
   assert.equal(done.results.length,workflow.steps.length);
   assert(done.results.find(r=>r.op==='quote').result.estimateOnly);
   assert(done.artifacts.some(a=>a.name==='luxor-clay-test.glb'));
+  assert(done.artifacts.some(a=>a.name==='report.html'));
+  const repArtifact=done.artifacts.find(a=>a.name==='report.html');
+  assert((await client.readResource({uri:repArtifact.uri})).contents[0].text.includes('<svg'));
   const image=done.artifacts.find(a=>a.mimeType==='image/jpeg');assert(image);
   assert((await client.readResource({uri:image.uri})).contents[0].blob.length>100);
   const exported=done.artifacts.find(a=>a.name==='luxor-clay-test.glb');
@@ -126,6 +133,8 @@ try {
   assert.equal(round2.externalHooks.unrealMcp.server,'unreal-mcp');
   assert(fs.existsSync(path.join(agentRunDir,'episodes.ndjson')),'missing episodes.ndjson');
   assert(fs.existsSync(path.join(agentRunDir,'look.plan.json')),'missing look.plan.json');
+  assert(fs.existsSync(path.join(agentRunDir,'report.html')),'missing runs/<id>/report.html');
+  assert((await client.readResource({uri:`potemkin://agent/sessions/${agentSessionId}/report`})).contents[0].text.includes('mermaid'));
   const mem=JSON.parse((await client.readResource({uri:'potemkin://agent/memory'})).contents[0].text);
   assert(mem.successfulConfigs.some(c=>c.runId===agentRunId),`missing ${agentRunId} in memory`);
   console.log(`Budgeted Planner → Actor → Critic MCP E2E passed: score ${round1.critique.score} → ${round2.critique.score}, seen ${(100*round1.critique.metrics.seenPainted).toFixed(1)}% → ${(100*round2.critique.metrics.seenPainted).toFixed(1)}%, spent $${round2.budget.spentUsd.toFixed(2)}/$0.25`);

@@ -36,6 +36,7 @@
 // one stopped by hand can be picked up with --resume <id>.
 import { parseArgs } from 'node:util';
 import { falKey, launchBrowser, openApp, startServer } from './browser.mjs';
+import { markdownToAnsi, writeRunReportFiles } from '../automation/words.mjs';
 
 const { values: a } = parseArgs({
   options: {
@@ -106,6 +107,7 @@ const { values: a } = parseArgs({
     'local-url': { type: 'string' },              // e.g. 'http://127.0.0.1:8188'
     'local-model': { type: 'string' },            // local checkpoint / model name override
     'local-tail': { type: 'boolean', default: false },
+    ansi: { type: 'boolean', default: false },    // render structured ANSI summary via @pierre/words
   },
 });
 // A look file stands in for the flags it names; whatever was typed on the command line wins.
@@ -276,7 +278,9 @@ try {
     if (a['uv-refine']) log(`uv-refine: ${JSON.stringify(await page.evaluate(() => window.trompe.uvRefine()))}`);
     if (a.finish) log(`finishing fill: ${JSON.stringify(await page.evaluate(() => window.trompe.finish()))}`);
     if (a.consolidate || a['uv-refine'] || a.ao || a.pbr || a.finish || +a.parts > 0 || +a.ground > 0 || +a.props > 0) await page.evaluate((runId) => window.trompe.save(runId), id);
-    log(`saved to runs/${id}/`);
+    const rep = writeRunReportFiles(id);
+    log(`saved to runs/${id}/${rep ? ` (${rep.htmlPath})` : ''}`);
+    if (a.ansi && rep) process.stdout.write(markdownToAnsi(rep.markdown, { width: process.stdout.columns || 88 }));
   }
 } catch (e) {
   // The page sometimes dies under a long run (it closes, or reloads). Every view is on disk by then, so pick the

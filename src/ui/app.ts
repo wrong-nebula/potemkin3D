@@ -2,6 +2,7 @@
 import '@ui-sdk/web/alert-dialog';
 import '@ui-sdk/web/button';
 import '@ui-sdk/web/checkbox';
+import '@ui-sdk/web/dialog';
 import '@ui-sdk/web/field';
 import '@ui-sdk/web/file-input';
 import '@ui-sdk/web/input';
@@ -17,6 +18,7 @@ import '@ui-sdk/web/toggle';
 import { createConfirm, type UiAlertDialogElement } from '@ui-sdk/web/alert-dialog';
 import type { UiButtonElement } from '@ui-sdk/web/button';
 import type { UiCheckboxElement } from '@ui-sdk/web/checkbox';
+import type { UiDialogElement } from '@ui-sdk/web/dialog';
 import type { UiFileInputElement } from '@ui-sdk/web/file-input';
 import type { UiInputElement } from '@ui-sdk/web/input';
 import type { UiListboxElement } from '@ui-sdk/web/listbox';
@@ -38,6 +40,7 @@ import { configureFal } from '../providers/fal';
 import { MODELS } from '../providers/models';
 import { configureProvider, type LocalBackend, type ProviderKind } from '../providers/router';
 import { LIGHTING, type Session } from '../session';
+import { buildCriticMarkdown, buildMonitorMarkdown, mountWordsView, renderStandaloneStudioReport } from './words';
 import hangar from '../../samples/hangar.look.json';
 import luxor from '../../samples/luxor.look.json';
 import tatooine from '../../samples/tatooine.look.json';
@@ -584,6 +587,49 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
 
   const glbBtn = makeButton('Export GLB', () => runExportGlb());
 
+  const docCache = new Map<string, string>();
+  const docsViewport = el('div', { class: 'words-stream docs-words' });
+  const docsWords = mountWordsView(docsViewport, { controls: true, idPrefix: 'pk-doc-' });
+  const docsTopicSeg = makeSegmented(
+    'Documentation topic',
+    [
+      { value: 'report', label: 'Live Report' },
+      { value: 'engine', label: 'Engine' },
+      { value: 'potemkin', label: 'Scenes' },
+      { value: 'material-maps', label: 'Materials' },
+      { value: 'automation', label: 'Automation' },
+      { value: 'todo', label: 'Roadmap' },
+    ],
+    'report',
+    (topic) => void loadDocTopic(topic),
+  );
+  const docsDialog = el<UiDialogElement>(
+    'ui-dialog',
+    { 'aria-label': 'Documentation and reports' },
+    el('ui-dialog-trigger', {}, el('button', { type: 'button' }, 'Docs')),
+    el('ui-dialog-backdrop', { hidden: '' }),
+    el(
+      'ui-dialog-content',
+      { hidden: '', class: 'docs-dialog-content' },
+      el(
+        'div',
+        { class: 'docs-dialog-head' },
+        el(
+          'div',
+          {},
+          el('ui-dialog-title', {}, 'Potemkin Documentation & Live Report'),
+          el('ui-dialog-description', {}, 'Streamed with @pierre/words, Pele Mermaid diagrams, and @pierre/highlights.'),
+        ),
+        el('div', { class: 'row fit' }, makeButton('Export HTML', () => runExportReport()).root, el('ui-dialog-close', {}, el('button', { type: 'button' }, 'Close'))),
+      ),
+      docsTopicSeg.wrap,
+      docsViewport,
+    ),
+  );
+  docsDialog.addEventListener('openchange', (ev) => {
+    if (ev.detail.value) void loadDocTopic(docsTopicSeg.value);
+  });
+
   const leftDockToggle = makeToggle('Left dock', false, (on) => {
     document.body.classList.remove('show-right');
     rightDockToggle.setPressed(false);
@@ -619,6 +665,7 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       stopBtn.root,
       el('span', { class: 'tb-sep' }),
       glbBtn.root,
+      docsDialog,
       el('a', { class: 'tb-link', href: '/loft-walk.html' }, 'Viewer ↗'),
       mobileBtns,
     ),
@@ -840,6 +887,10 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   repairRunBtn.root.hidden = true;
   const consolidateBtn = makeButton('Stitch seams', () => runConsolidate());
   const uvRefineBtn = makeButton('Refine UVs', () => runUvRefine());
+  const reportExportBtn = makeButton('Export report', () => runExportReport(), { className: 'full-btn' });
+  const criticStreamEl = el('div', { class: 'words-stream critic-words' });
+  criticStreamEl.hidden = true;
+  const criticWords = mountWordsView(criticStreamEl, { idPrefix: 'pk-crit-' });
   const criticFeedback = makeFeedback();
   let latestCritique: CritiqueReport | null = null;
 
@@ -965,9 +1016,11 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       criticEmpty,
       criticStats,
       criticChips,
+      criticStreamEl,
       el('div', { class: 'row' }, critiqueBtn.root, repairRunBtn.root),
       el('div', { class: 'divider' }),
       el('div', { class: 'row' }, consolidateBtn.root, uvRefineBtn.root),
+      reportExportBtn.root,
       criticFeedback.el,
     ),
     el(
@@ -1002,10 +1055,10 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   const statusBanner = makeFeedback();
   statusBanner.show('Ready — select a scene, plan cameras, or load a saved take.', 'info');
 
-  const log = el('pre', { class: 'log', 'aria-live': 'off' });
-  const say = (msg: string) => {
-    log.textContent = `${msg}\n${log.textContent}`.slice(0, 6000);
-  };
+  const monitorStreamEl = el('div', { class: 'words-stream monitor-words', 'aria-live': 'off' });
+  const monitorWords = mountWordsView(monitorStreamEl, { idPrefix: 'pk-mon-' });
+  const eventFeed: string[] = [];
+  let completedViewsCount = 0;
 
   const toggleMonitorBtn = makeButton('Toggle monitor', () => {
     if (!centerSplit) return;
@@ -1020,7 +1073,7 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       { class: 'bottom-grid' },
       el('div', { class: 'bottom-cell bottom-frames' }, el('div', { class: 'thumbs' }, stageSees, stagePaints)),
       el('div', { class: 'bottom-cell' }, el('div', { class: 'stats' }, sViews, sCov, sCost, sTime), statusBanner.el),
-      el('div', { class: 'bottom-cell bottom-log' }, log),
+      el('div', { class: 'bottom-cell bottom-log' }, monitorStreamEl),
     ),
   );
 
@@ -1029,6 +1082,32 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   let currentShading: 'clay' | 'textured' | 'lit' = 'clay';
   const canSave = import.meta.env.DEV && !new URLSearchParams(location.search).has('nosave');
   const money = (n: number) => `$${n.toFixed(2)}`;
+
+  const refreshMonitorWords = (streaming = false) => {
+    const md = buildMonitorMarkdown({
+      sceneName: session.level?.name ?? 'Scene',
+      mode: session.level?.mode ?? 'level',
+      plannedViews: session.plan?.views.length ?? session.record?.views.length,
+      waves: session.plan?.waves.length,
+      completedViews: completedViewsCount || session.record?.views.length,
+      predictedCoverage: vCov.textContent ?? undefined,
+      cost: vCost.textContent ?? undefined,
+      provider: providerSel.value,
+      hasPbr: !!session.engine?.pbr,
+      hasAo: !!session.engine?.ao,
+      critiqueScore: latestCritique?.score,
+      critiqueVerdict: latestCritique?.verdict,
+      streaming,
+      events: eventFeed,
+    });
+    monitorWords.update(md, { streaming, animated: streaming });
+  };
+
+  const say = (msg: string) => {
+    eventFeed.unshift(msg);
+    if (eventFeed.length > 16) eventFeed.length = 16;
+    refreshMonitorWords(isRunning);
+  };
 
   const syncHiddenAgentState = (node: HTMLElement, hide: boolean) => {
     node.hidden = hide;
@@ -1306,6 +1385,9 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
     );
 
     syncHiddenAgentState(repairRunBtn.root, rep.actions.length === 0);
+    criticStreamEl.hidden = false;
+    criticWords.stream(buildCriticMarkdown(rep, session.level?.name ?? 'Scene', savedAs), { charsPerFrame: 220 });
+    refreshMonitorWords(false);
     if (rep.actions.length > 0) {
       const summary = rep.actions.map((act) => `${act.op}: ${act.reason}`).join(' · ');
       criticFeedback.show(summary, rep.verdict === 'pass' ? 'ok' : 'info');
@@ -1320,6 +1402,8 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   const resetCriticUi = () => {
     latestCritique = null;
     criticStats.hidden = true;
+    criticStreamEl.hidden = true;
+    criticWords.update('', { streaming: false });
     criticChips.replaceChildren();
     syncHiddenAgentState(repairRunBtn.root, true);
     criticPill.textContent = 'Not scored';
@@ -1534,6 +1618,8 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
     walkToggle.setPressed(false);
     hint.classList.remove('show');
     savedAs = undefined;
+    completedViewsCount = 0;
+    eventFeed.length = 0;
     stageSees.classList.remove('filled');
     stagePaints.classList.remove('filled');
     for (const b of [vViews, vCov, vCost, vTime]) b.textContent = '–';
@@ -1652,12 +1738,13 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       if (e.type === 'view-start') drawThumb(stageSees, thumbSees, e.state, S);
       if (e.type === 'view-done') {
         drawThumb(stagePaints, thumbPaints, e.view.gen, S);
-        vViews.textContent = `${++n}/${session.plan?.views.length ?? '?'}`;
+        completedViewsCount = ++n;
+        vViews.textContent = `${n}/${session.plan?.views.length ?? '?'}`;
         vCov.textContent = `${Math.round(100 * e.view.predicted)}%`;
         vCost.textContent = `$${e.cost.toFixed(2)}`;
         vTime.textContent = `${Math.round(e.elapsed)}s`;
         syncViewportHud();
-        say(`view ${e.view.index} · ${e.view.model} · ${e.view.seconds.toFixed(1)}s`);
+        say(`view \`#${e.view.index}\` · \`${e.view.model}\` · ${e.view.seconds.toFixed(1)}s`);
       }
       if (e.type === 'error') {
         const msg = /abort/i.test(e.message) ? `Stopped at view ${e.index}.` : `View ${e.index} failed: ${e.message}`;
@@ -1701,6 +1788,7 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       runBtn.setDisabled(false);
       planBtn.setDisabled(false);
       stopBtn.setDisabled(true);
+      refreshMonitorWords(false);
       syncPbr();
       void listRuns();
     }
@@ -1758,6 +1846,106 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       c.toBlob((b) => b && download(b, `${session.level!.name}_${name}.png`), 'image/png');
     }
     matFeedback.show(`Saved ${maps.length} PBR PNGs (${ch.size} px).`, 'ok');
+  }
+
+  function buildLiveReportMarkdown(): string {
+    const lvl = session.level;
+    const plan = session.plan;
+    const rec = session.record;
+    const lookCfg = {
+      level: sampleSel.value,
+      mode: lvl?.mode ?? targetModeSel.value,
+      atlas: +atlasSel.value,
+      viewSize: +viewResSel.value,
+      layout: uvLayoutSel.value,
+      lighting: skySeg.value,
+      provider: providerSel.value,
+      style: styleArea.value,
+      roofStyle: roofInput.value,
+      floorStyle: floorInput.value,
+    };
+    const parts = [
+      `# Studio Process Report · ${lvl?.name ?? 'Scene'}`,
+      '',
+      '| Property | Value |',
+      '| :--- | :--- |',
+      `| Geometry | \`${lvl?.name ?? '–'}\` · ${geoMeta.textContent ?? '–'} (\`${lvl?.mode ?? 'level'}\`) |`,
+      `| Atlas & view | ${atlasSel.value} px / ${viewResSel.value} px (\`${uvLayoutSel.value}\`) |`,
+      `| Camera plan | ${plan ? `${plan.views.length} views across ${plan.waves.length} waves` : 'Not planned yet'} |`,
+      `| Views painted | ${rec ? `${rec.views.length} views (${vCov.textContent} predicted)` : '0'} |`,
+      `| Spend & time | ${vCost.textContent ?? '–'} · ${vTime.textContent ?? '–'} |`,
+      `| Material maps | PBR: **${session.engine?.pbr ? 'Ready' : 'None'}** · AO: **${session.engine?.ao ? 'Baked' : 'None'}** |`,
+      '',
+      buildMonitorMarkdown({
+        sceneName: lvl?.name ?? 'Scene',
+        mode: lvl?.mode ?? 'level',
+        plannedViews: plan?.views.length ?? rec?.views.length,
+        waves: plan?.waves.length,
+        completedViews: completedViewsCount || rec?.views.length,
+        predictedCoverage: vCov.textContent ?? undefined,
+        cost: vCost.textContent ?? undefined,
+        provider: providerSel.value,
+        hasPbr: !!session.engine?.pbr,
+        hasAo: !!session.engine?.ao,
+        critiqueScore: latestCritique?.score,
+        critiqueVerdict: latestCritique?.verdict,
+        events: eventFeed,
+      }),
+      '',
+      ...(latestCritique ? [buildCriticMarkdown(latestCritique, lvl?.name ?? 'Scene', savedAs), ''] : []),
+      '## Active Look Configuration',
+      '',
+      '```json',
+      JSON.stringify(lookCfg, null, 2),
+      '```',
+      '',
+      '## CLI & MCP Reproduction',
+      '',
+      '```bash',
+      `node scripts/texture.mjs --level samples/${(lvl?.name ?? 'courtyard').toLowerCase()}.glb --views ${Math.round(budgetSlider.value)} --layout ${uvLayoutSel.value} --provider ${providerSel.value} --ansi`,
+      '```',
+    ];
+    return parts.join('\n');
+  }
+
+  async function loadDocTopic(topic: string) {
+    if (topic === 'report') {
+      docsWords.stream(buildLiveReportMarkdown(), { charsPerFrame: 420 });
+      return;
+    }
+    const cached = docCache.get(topic);
+    if (cached) {
+      docsWords.stream(cached, { charsPerFrame: 600 });
+      return;
+    }
+    docsWords.update(`_Loading \`${topic}\` documentation…_`, { streaming: true });
+    try {
+      const res = await fetch(`/api/docs?topic=${encodeURIComponent(topic)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = (await res.json()) as { markdown: string };
+      docCache.set(topic, payload.markdown);
+      docsWords.stream(payload.markdown, { charsPerFrame: 600 });
+    } catch (e) {
+      docsWords.update(`> Could not load \`${topic}\`: ${String((e as Error)?.message ?? e)}`, { streaming: false });
+    }
+  }
+
+  async function runExportReport() {
+    const lvlName = session.level?.name ?? 'scene';
+    const md = buildLiveReportMarkdown();
+    const html = renderStandaloneStudioReport({
+      title: `${lvlName} Report`,
+      subtitle: savedAs ? `Run ${savedAs}` : `${lvlName} Studio Session`,
+      markdown: md,
+    });
+    if (canSave && savedAs) {
+      await Promise.allSettled([
+        fetch(`/api/runs/${encodeURIComponent(savedAs)}/report.md`, { method: 'POST', body: md }),
+        fetch(`/api/runs/${encodeURIComponent(savedAs)}/report.html`, { method: 'POST', body: html }),
+      ]);
+    }
+    download(new Blob([html], { type: 'text/html' }), `${lvlName.toLowerCase()}_report.html`);
+    statusBanner.show(`Exported ${lvlName.toLowerCase()}_report.html${savedAs ? ` (and runs/${savedAs}/report.html)` : ''}.`, 'ok');
   }
 
   setLighting(SAMPLES[0].lighting);

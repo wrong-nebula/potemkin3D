@@ -6,15 +6,18 @@ import { commands, invoke } from './commands.mjs';
 import { workflow, jsonSchema } from './schema.mjs';
 import { getJob, terminal } from './jobs.mjs';
 import { AutomationError, errorInfo, redact } from './files.mjs';
+import { formatCommandMarkdown, markdownToAnsi } from './words.mjs';
 
 export function parseCLI(args) {
   const [command='help',...rest]=args;
-  const input={};let json=false,wait=false,timeout=1800;
+  const input={};let json=false,ansi=false,markdown=false,wait=false,timeout=1800;
   for(let i=0;i<rest.length;i++) {
     const token=rest[i];
     if(token==='--json'){json=true;continue;}
+    if(token==='--ansi'){ansi=true;continue;}
+    if(token==='--markdown'){markdown=true;continue;}
     if(token==='--wait'){wait=true;continue;}
-    if(token==='--help')return {command:'help',input:{name:command},json};
+    if(token==='--help')return {command:'help',input:{name:command},json,ansi,markdown};
     if(!token.startsWith('--')) {
       if(command==='help'&&!input.name){input.name=token;continue;}
       throw new AutomationError('INVALID_INPUT',`Unexpected argument: ${token}`);
@@ -32,12 +35,12 @@ export function parseCLI(args) {
     if(flag==='--wait-timeout') {timeout=Number(raw);if(!Number.isFinite(timeout)||timeout<=0)throw new AutomationError('INVALID_INPUT','Invalid wait timeout');continue;}
     const key=flag.slice(2).replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
     // Numeric IDs and paths stay strings; numeric/boolean options and nested JSON retain their types.
-    if(!['id','path','sample','name','target','scene','output','sessionId','proposalId','runId','look','approvedBy'].includes(key)) {
+    if(!['id','path','sample','name','target','scene','output','sessionId','proposalId','runId','look','approvedBy','topic','format'].includes(key)) {
       try{raw=JSON.parse(raw);}catch{}
     }
     input[key]=raw;
   }
-  return {command:command==='--help'?'help':command,input,json,wait,timeout};
+  return {command:command==='--help'?'help':command,input,json,ansi,markdown,wait,timeout};
 }
 function help(name) {
   if(name) {
@@ -53,27 +56,52 @@ function help(name) {
     wait:'--wait polls a returned job ID. --wait-timeout limits only client waiting; the job continues. Ctrl-C stops waiting, not the job.'};
 }
 export async function main(args=process.argv.slice(2)) {
-  let json=args.includes('--json');
+  let json=args.includes('--json'), ansi=args.includes('--ansi'), markdown=args.includes('--markdown');
+  const cols=()=>Math.max(48,Math.min(140,process.stdout.columns||88));
   try {
-    const parsed=parseCLI(args);json=parsed.json;
+    const parsed=parseCLI(args);json=parsed.json;ansi=parsed.ansi;markdown=parsed.markdown;
     let data=parsed.command==='help'?help(parsed.input.name):await invoke(parsed.command,parsed.input);
+    let renderedCmd=parsed.command;
     if(parsed.wait) {
       if(!data.id)throw new AutomationError('INVALID_INPUT','--wait requires a job-producing command or job-status');
       const deadline=Date.now()+parsed.timeout*1000;let cursor=0;
       for(;;) {
         data=getJob(data.id,{cursor,limit:100});
-        for(const e of data.events)process.stderr.write(redact(JSON.stringify(e))+'\n');
+        for(const e of data.events) {
+          if(ansi) {
+            const line=e.message??(e.op?`${e.type}: \`${e.op}\` (step ${e.step})`:`\`${e.type}\``);
+            process.stderr.write(redact(markdownToAnsi(`- **${(e.at??'').slice(11,19)||'job'}** ${line}`,{width:cols()})));
+          } else {
+            process.stderr.write(redact(JSON.stringify(e))+'\n');
+          }
+        }
         cursor=data.nextCursor;
         if(terminal.has(data.status))break;
         if(Date.now()>deadline)throw new AutomationError('WAIT_TIMEOUT',`Job ${data.id} is still running; poll job-status or cancel it explicitly`);
         await new Promise(resolve=>setTimeout(resolve,500));
       }
       if(data.status!=='succeeded')process.exitCode=data.status==='cancelled'?130:1;
+      renderedCmd='job-status';
+    }
+    if(ansi&&!json) {
+      const md=formatCommandMarkdown(renderedCmd,data);
+      process.stdout.write(redact(markdownToAnsi(md,{width:cols()})));
+      return;
+    }
+    if(markdown&&!json) {
+      const md=formatCommandMarkdown(renderedCmd,data);
+      process.stdout.write(redact(md)+'\n');
+      return;
     }
     const output={version:1,ok:!process.exitCode,data};
     process.stdout.write(redact(JSON.stringify(output,null,json?0:2))+'\n');
   } catch(error) {
     const info=errorInfo(error);process.exitCode=['INVALID_INPUT','UNKNOWN_COMMAND','PAID_OPT_IN_REQUIRED','INVALID_PATH'].includes(info.code)?2:1;
+    if(ansi&&!json) {
+      const errMd=`# Error · \`${info.code}\`\n\n> ${info.message}\n`;
+      process.stdout.write(redact(markdownToAnsi(errMd,{width:cols()})));
+      return;
+    }
     process.stdout.write(redact(JSON.stringify({version:1,ok:false,error:info},null,json?0:2))+'\n');
   }
 }

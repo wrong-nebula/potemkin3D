@@ -177,6 +177,50 @@ describe('Potemkin Studio ui-sdk interface & agent bridge', () => {
         { timeout: 20000 },
       );
 
+      // Monitor dock streams a Pele Mermaid SVG flowchart via @pierre/words
+      const monitorHasDiagram = await page.evaluate(() => Boolean(document.querySelector('.monitor-words [data-markdown="mermaid"] svg')));
+      expect(monitorHasDiagram).toBe(true);
+
+      // Critic tab streams Mermaid + TeX math report via @pierre/words
+      const critRes = await page.evaluate(async () => {
+        const ag = (window as unknown as { agent: { act: (p: object) => Promise<{ ok: boolean; error?: { message: string } }> } }).agent;
+        return ag.act({
+          steps: [
+            { ref: 'Inspector sections', action: 'setValue', args: ['Critic'] },
+            { ref: 'Evaluate quality', action: 'press' },
+          ],
+        });
+      });
+      expect(critRes.ok, critRes.error?.message).toBe(true);
+      await page.waitForFunction(
+        () => Boolean(document.querySelector('.critic-words [data-markdown="mermaid"] svg')),
+        null,
+        { timeout: 15000 },
+      );
+
+      // Progressive documentation dialog streams repo docs via /api/docs + @pierre/words
+      const docsRes = await page.evaluate(async () => {
+        const ag = (window as unknown as { agent: { act: (p: object) => Promise<{ ok: boolean; error?: { message: string } }> } }).agent;
+        return ag.act({
+          steps: [
+            { ref: 'Potemkin Documentation & Live Report', action: 'setOpen', args: [true] },
+            { ref: 'Documentation topic', action: 'setValue', args: ['Engine'] },
+          ],
+        });
+      });
+      expect(docsRes.ok, docsRes.error?.message).toBe(true);
+      await page.waitForFunction(
+        () => /engine development notes/i.test(document.querySelector('.docs-words')?.textContent ?? ''),
+        null,
+        { timeout: 10000 },
+      );
+      await page.keyboard.press('Escape');
+
+      await page.evaluate(async () => {
+        const ag = (window as unknown as { agent: { act: (p: object) => Promise<{ ok: boolean }> } }).agent;
+        await ag.act({ steps: [{ ref: 'Inspector sections', action: 'setValue', args: ['Plan'] }] });
+      });
+
       await page.locator('ui-checkbox').first().focus();
       await page.keyboard.press('Space');
       const adaptiveChecked = await page.evaluate(() => (document.querySelector('ui-checkbox') as unknown as { checked: boolean }).checked);

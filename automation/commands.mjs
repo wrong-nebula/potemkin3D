@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { ROOT, AutomationError, inside, readJSON, inspectGlb } from './files.mjs';
 import { object, id, jobId, relativePath, workflow, planInput, screenshot, buildInput, paidSteps, jsonSchema } from './schema.mjs';
-import { startJob, getJob, listJobs, cancelJob } from './jobs.mjs';
+import { startJob, getJob, listJobs, cancelJob, jobDir, terminal } from './jobs.mjs';
 import { preflight } from './preflight.mjs';
 import {
   agentPlan, agentPlanInput,
@@ -13,6 +13,17 @@ import {
   agentCritique, agentCritiqueInput,
   agentStatus, readAgentMemory,
 } from './agent.mjs';
+import {
+  listDocs,
+  readDoc,
+  formatJobMarkdown,
+  formatAgentSessionMarkdown,
+  formatRunMarkdown,
+  markdownToHtmlFragment,
+  markdownToAnsi,
+  renderStandaloneReportHtml,
+  writeRunReportFiles,
+} from './words.mjs';
 
 const empty=object({});
 export const examples=['free-luxor','texture-luxor','resume-luxor'];
@@ -27,7 +38,7 @@ export function runInfo(run,root=ROOT) {
   return {id:run,level:m.level,views:m.views?.length??0,cost:m.cost??0,seconds:m.seconds??0,
     partial:!!m.partial,lighting:m.lighting?.name,layout:m.layout?.kind,pages:m.pages,
     atlasSize:m.pages?.size??m.atlasSize??null,viewSize:m.viewSize,
-    artifacts:fs.readdirSync(path.dirname(file)).filter(n=>/\.(glb|png|jpg)$/.test(n)).map(name=>({name,path:`runs/${run}/${name}`}))};
+    artifacts:fs.readdirSync(path.dirname(file)).filter(n=>/\.(glb|png|jpg|html|md)$/.test(n)).map(name=>({name,path:`runs/${run}/${name}`}))};
 }
 const command=(description,input,handler,readOnly=true)=>({description,input,handler,readOnly});
 export const commands={
@@ -79,6 +90,61 @@ export const commands={
   'agent-critique':command('Run the standalone Critic on a saved run (no model calls): coverage, high-rank px/m, cross-view seam ratio, SAM/MoGe residuals, diagnostic screenshots and repair prescriptions.',agentCritiqueInput,input=>agentCritique(input),false),
   'agent-status':command('Inspect a budgeted Planner → Actor → Critic session, pending spend proposal, episodic trace and Blender/Unreal MCP hooks.',object({sessionId:jobId}),input=>agentStatus(input)),
   'agent-memory':command('Read cross-session memory of successful material presets, layouts and repair pattern score gains.',empty,()=>readAgentMemory()),
+  docs:command('List available Potemkin documentation topics powered by @pierre/words.',empty,()=>({docs:listDocs()})),
+  doc:command('Render a Potemkin documentation topic (engine, readme, potemkin, material-maps, automation, tutorial, provenance, todo) as Markdown, HTML, standalone HTML or ANSI.',
+    object({topic:z.string().default('engine'),format:z.enum(['markdown','html','standalone-html','ansi']).default('markdown'),width:z.number().int().min(40).max(200).default(88)}),
+    ({topic,format,width})=>readDoc(topic,{format,width})),
+  report:command('Render a progressive or finished process report (Markdown, HTML with Mermaid/highlights, or ANSI) for a jobId, sessionId, or runId, optionally exporting runs/<runId>/report.html.',
+    object({
+      jobId:jobId.optional(),
+      sessionId:jobId.optional(),
+      runId:id.optional(),
+      format:z.enum(['markdown','html','standalone-html','ansi']).default('markdown'),
+      width:z.number().int().min(40).max(200).default(88),
+      exportHtml:z.boolean().default(false),
+    }),
+    ({jobId:jid,sessionId:sid,runId:rid,format,width,exportHtml})=>{
+      let md='', title='Potemkin Report', subtitle='Process Report', incomplete=false, exported=null;
+      if(jid) {
+        const job=getJob(jid,{cursor:0,limit:100});
+        const reqFile=path.join(jobDir(jid),'request.json');
+        const req=fs.existsSync(reqFile)?readJSON(reqFile).payload:null;
+        md=formatJobMarkdown(job,req);
+        title=`Job ${jid}`; subtitle=`${job.kind} · ${job.status}`; incomplete=!terminal.has(job.status);
+      } else if(sid) {
+        const session=agentStatus({sessionId:sid});
+        md=formatAgentSessionMarkdown(session);
+        title=`Session ${sid}`; subtitle=`Run ${session.runId} · ${session.status}`; incomplete=session.status!=='completed';
+        if(exportHtml&&session.runId)exported=writeRunReportFiles(session.runId);
+      } else if(rid) {
+        if(exportHtml) {
+          exported=writeRunReportFiles(rid);
+          if(!exported)throw new AutomationError('NOT_FOUND',`Unknown saved run: ${rid}`);
+          md=exported.markdown;
+        } else {
+          const runJson=inside(ROOT,`runs/${rid}/run.json`);
+          const meta=readJSON(runJson);
+          const critPath=inside(ROOT,`runs/${rid}/critique.json`,{exists:false});
+          const planPath=inside(ROOT,`runs/${rid}/look.plan.json`,{exists:false});
+          md=formatRunMarkdown(rid,meta,{
+            critique:fs.existsSync(critPath)?readJSON(critPath):null,
+            planMeta:fs.existsSync(planPath)?readJSON(planPath):null,
+          });
+        }
+        title=`Run ${rid}`; subtitle='Saved run report';
+      } else {
+        throw new AutomationError('INVALID_INPUT','Specify one of jobId, sessionId, or runId');
+      }
+      return {
+        title,
+        incomplete,
+        markdown:md,
+        ...(format==='html'?{html:markdownToHtmlFragment(md,{incomplete,active:incomplete})}:{}),
+        ...(format==='standalone-html'?{html:renderStandaloneReportHtml({title,subtitle,markdown:md,incomplete})}:{}),
+        ...(format==='ansi'?{ansi:markdownToAnsi(md,{width})}:{}),
+        ...(exported?{reportPath:exported.htmlPath,reportMarkdownPath:exported.markdownPath}:{}),
+      };
+    },false),
 };
 export async function invoke(name,input={}) {
   const spec=commands[name]; if(!spec)throw new AutomationError('UNKNOWN_COMMAND',`Unknown command: ${name}`);

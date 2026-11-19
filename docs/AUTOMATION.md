@@ -96,12 +96,15 @@ MCP resources:
 
 - `potemkin://tutorial`
 - `potemkin://automation-reference`
+- `potemkin://docs/<topic>` (`engine`, `readme`, `potemkin`, `material-maps`, `automation`, `tutorial`, `provenance`, `todo`)
 - `potemkin://schema/workflow`
 - `potemkin://examples/free-luxor`, `potemkin://examples/texture-luxor`, `potemkin://examples/resume-luxor`
-- `potemkin://jobs/<UUID>`
-- `potemkin://jobs/<UUID>/artifacts/<name>`
+- `potemkin://jobs/<UUID>` and `potemkin://jobs/<UUID>/report` (progressive Markdown + Mermaid job report)
+- `potemkin://jobs/<UUID>/artifacts/<name>` (including `report.md` and standalone `report.html`)
 - `potemkin://agent/memory`
-- `potemkin://agent/sessions/<UUID>`
+- `potemkin://agent/sessions/<UUID>` and `potemkin://agent/sessions/<UUID>/report`
+
+CLI commands retain deterministic JSON output by default (`--json` for single-line JSON) and accept `--ansi` or `--markdown` (powered by `@pierre/words`, `@pierre/highlights`, and Pele Mermaid) for formatted terminal tables, live `--wait --ansi` progress telemetry, progressive documentation (`potemkin doc --topic engine --ansi`), and standalone HTML/Markdown process reports (`potemkin report --run-id <id> --export-html true --ansi`).
 
 Only manifest-listed artifacts can be read through MCP. Inline resources are limited to 8 MiB; larger GLBs remain available at their local paths. The `free-luxor-tour` prompt guides clients through discovery and the free workflow, and `budgeted-agent-loop` guides clients through the human-gated Planner → Actor → Critic loop and downstream `blender-mcp` / `unreal-mcp` chaining hooks. The server uses the official [TypeScript MCP SDK](https://github.com/modelcontextprotocol/typescript-sdk) and [stdio transport](https://ts.sdk.modelcontextprotocol.io/v2/serving/stdio.html).
 

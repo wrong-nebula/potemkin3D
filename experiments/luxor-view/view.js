@@ -20,6 +20,7 @@ import { makePomAtlas, pomLayer, pomUniforms } from './pom.js';
 import { TextureLod } from './lod.js';
 import { DUST_FRAG, RAYS_FRAG, makeMotes, noise, sandLayer, sandUniforms } from './sand.js';
 import { BLUR_FRAG, DOF_FRAG, DOWN_FRAG, FINAL_FRAG, FLARE_BLUR, FLARE_FEATURES, FLARE_STREAK, FLARE_THRESHOLD, LUM_FRAG, UP_FRAG, makeDirtTexture, mat } from './film.js';
+import { mountWalkNotes } from '../../src/demo/walk-notes.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
@@ -506,10 +507,20 @@ new GLTFLoader().load('./level_2k.glb', (gltf) => {
   placeSun();
   msg.remove();
   hud.hidden = false;
+  walkNotes = mountWalkNotes({
+    sceneKind: 'luxor',
+    getSnapshot: () => ({
+      pos: camera.position,
+      on: { ...on },
+      pomDepthMm: Math.round(pomUniforms.uPomDepth.value * 1000),
+      lodStatus: lod?.status,
+    }),
+  });
 }, (e) => {
   if (e.total) msg.textContent = `loading the temple… ${Math.round((100 * e.loaded) / e.total)}%`;
 }, (e) => { msg.textContent = `the level did not load: ${e?.message ?? e}`; });
 
+let walkNotes = null;
 let last = performance.now();
 renderer.setAnimationLoop((now) => {
   const ms = now - last, dt = Math.min(0.05, ms / 1000);
@@ -522,7 +533,10 @@ renderer.setAnimationLoop((now) => {
   lod?.update(dt, rt.h);
   render(dt);
   govern(ms, now);
-  if (frame % 15 === 0) drawHud();
+  if (frame % 15 === 0) {
+    drawHud();
+    walkNotes?.tick();
+  }
 });
 window.luxorView = { camera, stand, state, on, grade, dust, pom: pomUniforms, lod: () => lod?.status, ready: () => !!level?.parent,
   snapshot: () => { updateCamera(0); render(0); return canvas.toDataURL('image/png'); },

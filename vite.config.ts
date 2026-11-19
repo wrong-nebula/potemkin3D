@@ -150,6 +150,34 @@ function falProxy(): Plugin {
           fail(res, 502, `local proxy error: ${(e as Error).message}`);
         }
       });
+      // Safe read-only documentation endpoint for the Studio progressive Markdown viewer (@pierre/words).
+      const DOCS: Record<string, { title: string; path: string; summary: string }> = {
+        engine: { title: 'Engine Architecture', path: 'ENGINE.md', summary: 'Geometry prepasses, camera planning, projection, stitching, UV refinement and PBR baking.' },
+        readme: { title: 'Overview & Quickstart', path: 'README.md', summary: 'Setup, studio authoring workflow, CLI flags and sample scenes.' },
+        potemkin: { title: 'Potemkin Scenes & Film Camera', path: 'POTEMKIN.md', summary: 'Scene-referred HDR walkthroughs, lens flare, DOF, POM relief and progressive 4K LOD.' },
+        'material-maps': { title: 'Material Maps & Presets', path: 'docs/material-maps.md', summary: 'Intrinsic and PATINA height, roughness, metallic, normal and glTF ORM channels.' },
+        automation: { title: 'Automation & MCP Reference', path: 'docs/AUTOMATION.md', summary: 'Persistent jobs, CLI commands, MCP server tools/resources and spend guards.' },
+        tutorial: { title: 'Free Walkthrough Tutorial', path: 'docs/TUTORIAL.md', summary: 'Zero-cost end-to-end tour of planning, clay self-test and scene screenshots.' },
+        provenance: { title: 'Provenance & Licensing', path: 'PROVENANCE.md', summary: 'Attribution, upstream lineage and Apache-2.0 licensing details.' },
+        todo: { title: 'Research & Roadmap', path: 'TODO.md', summary: 'Measured benchmarks across UV unwrap, local providers, Critic loop and research spikes.' },
+      };
+      server.middlewares.use('/api/docs', async (req, res) => {
+        if (req.method !== 'GET') return fail(res, 405, 'GET only');
+        const u = new URL(req.url ?? '', 'http://x');
+        const topic = u.searchParams.get('topic');
+        res.setHeader('content-type', 'application/json');
+        if (!topic) {
+          return res.end(JSON.stringify(Object.entries(DOCS).map(([id, meta]) => ({ id, ...meta }))));
+        }
+        const entry = DOCS[topic.toLowerCase()];
+        if (!entry) return fail(res, 404, 'unknown doc topic');
+        try {
+          const markdown = await fs.readFile(path.join(server.config.root, entry.path), 'utf8');
+          res.end(JSON.stringify({ id: topic.toLowerCase(), ...entry, markdown }));
+        } catch (e) {
+          fail(res, 500, `doc read error: ${(e as Error).message}`);
+        }
+      });
     },
   };
 }

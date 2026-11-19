@@ -9,8 +9,9 @@ import { z } from 'zod';
 import { commands, invoke, examples } from './commands.mjs';
 import { ROOT, errorInfo, redact, AutomationError } from './files.mjs';
 import { workflow, jsonSchema } from './schema.mjs';
-import { getJob, listJobs, artifact } from './jobs.mjs';
+import { getJob, listJobs, artifact, jobDir } from './jobs.mjs';
 import { readAgentMemory, listAgentSessions, agentStatus } from './agent.mjs';
+import { listDocs, readDoc, formatJobMarkdown, formatAgentSessionMarkdown } from './words.mjs';
 
 const resultSchema=z.object({version:z.literal(1),ok:z.boolean(),data:z.unknown().optional(),error:z.unknown().optional()});
 export function createServer() {
@@ -42,8 +43,22 @@ export function createServer() {
     const entry=artifact(id,name);
     if(entry.bytes>8*1024*1024)throw new AutomationError('ARTIFACT_TOO_LARGE',`Read the local artifact at ${entry.path}; MCP inline reads are limited to 8 MiB`);
     const data=fs.readFileSync(entry.file);
-    return {contents:[{uri:uri.href,mimeType:entry.mimeType,...(entry.mimeType==='application/json'?{text:redact(data.toString())}:{blob:data.toString('base64')})}]};
+    const isText=entry.mimeType==='application/json'||entry.mimeType==='text/markdown'||entry.mimeType==='text/html';
+    return {contents:[{uri:uri.href,mimeType:entry.mimeType,...(isText?{text:redact(data.toString())}:{blob:data.toString('base64')})}]};
   });
+  server.registerResource('doc',new ResourceTemplate('potemkin://docs/{topic}',{
+    list:async()=>({resources:listDocs().map(d=>({uri:d.uri,name:d.title,description:d.summary,mimeType:'text/markdown'}))})}),
+    {mimeType:'text/markdown'},(uri,{topic})=>({contents:[{uri:uri.href,mimeType:'text/markdown',text:readDoc(topic,{format:'markdown'}).markdown}]}));
+  server.registerResource('job-report',new ResourceTemplate('potemkin://jobs/{id}/report',{list:undefined}),
+    {mimeType:'text/markdown',description:'Progressive Markdown + Mermaid report for a running or finished job'},(uri,{id})=>{
+      const job=getJob(id,{cursor:0,limit:100});
+      const reqFile=path.join(jobDir(id),'request.json');
+      const req=fs.existsSync(reqFile)?JSON.parse(fs.readFileSync(reqFile,'utf8')).payload:null;
+      return {contents:[{uri:uri.href,mimeType:'text/markdown',text:redact(formatJobMarkdown(job,req))}]};
+    });
+  server.registerResource('agent-session-report',new ResourceTemplate('potemkin://agent/sessions/{id}/report',{list:undefined}),
+    {mimeType:'text/markdown',description:'Progressive Markdown + Mermaid report for a Planner → Actor → Critic session'},(uri,{id})=>({
+      contents:[{uri:uri.href,mimeType:'text/markdown',text:redact(formatAgentSessionMarkdown(agentStatus({sessionId:id})))}]}));
   server.registerResource('agent-memory','potemkin://agent/memory',{mimeType:'application/json',description:'Cross-session memory of material presets and Critic repair patterns'},uri=>({contents:[{uri:uri.href,mimeType:'application/json',text:redact(readAgentMemory())}]}));
   server.registerResource('agent-session',new ResourceTemplate('potemkin://agent/sessions/{id}',{list:async()=>({resources:listAgentSessions().map(s=>({uri:`potemkin://agent/sessions/${s.id}`,name:`${s.runId}: ${s.status}`,mimeType:'application/json'}))})}),
     {mimeType:'application/json'},(uri,{id})=>({contents:[{uri:uri.href,mimeType:'application/json',text:redact(agentStatus({sessionId:id}))}]}));

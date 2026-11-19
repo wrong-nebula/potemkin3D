@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
+import { mountWalkNotes } from './walk-notes.js';
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
@@ -1002,6 +1003,10 @@ async function start() {
   resize();
   msg.remove();
   hud.hidden = false;
+  const walkNotes = mountWalkNotes({
+    sceneKind: 'loft',
+    getSnapshot: () => ({ pos: position, on: { ...on }, meta, hasMaps, focus: state.focus, runId: RUN }),
+  });
   window.demo = { state, on, path, camera, position, keys, pace, get length() { return pathLength; }, get scale() { return scale; }, get size() { return [rt.w, rt.h]; },
     // milliseconds a frame costs to draw, the screen's refresh aside: n frames one after the other, then wait for the graphics card
     bench(n = 120, moving = true) {
@@ -1026,7 +1031,10 @@ async function start() {
     render(dt);
     govern(now - last0);
     last0 = now;
-    if (frame % 10 === 0) drawHud();
+    if (frame % 10 === 0) {
+      drawHud();
+      walkNotes.tick();
+    }
   });
 }
 
