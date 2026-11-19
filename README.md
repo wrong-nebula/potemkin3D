@@ -20,18 +20,19 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory deploy/potemkin3d
 
 Open **http://localhost:8080/** for the loft or **http://localhost:8080/luxor/** for the temple. Serve that directory as the website root so the shared scene menu works.
 
-In Luxor, use **WASD** to walk, **Shift** to run, and click or drag to look. **1–5** select viewpoints. **P** toggles carved depth, **J** cavity shadows, **O** weathering, **U** sand and dust, and **R** light shafts. The on-screen controls list the other effects.
+In Luxor, use **WASD** to walk, **Shift** to run, and click or drag to look. **1–5** select viewpoints. **P** toggles carved depth, **J** cavity shadows, **O** weathering, **U** sand and dust, **R** light shafts, and **I** (or **?**) opens the contextual **Field Notes & Provenance** drawer. The on-screen controls list the other effects.
 
 ## CLI, MCP and tutorial
 
-The project includes a JSON CLI and a stdio MCP server for agents. Both expose the same schemas, persistent background jobs, progress, cancellation, artifact manifests, and a budgeted **Planner → Actor → Critic** session loop (`agent-plan` → `agent-approve` → `agent-act`) with human spend gating, episodic run traces, cross-session repair memory and Blender/Unreal MCP chaining hooks. Scene inspection, camera planning, screenshots, painting, repairs, material maps, validation and GLB export are available without browser clicking.
+The project includes a JSON/ANSI CLI (`--json`, `--ansi`, `--markdown`) and a stdio MCP server for agents. Both expose the same validated schemas, persistent background jobs, streaming Markdown + Pele Mermaid reports (`potemkin report`, `potemkin docs`), cancellation, artifact manifests, live Blender/Unreal MCP push (`dcc-sync` / `potemkin_dcc_sync`), and a budgeted **Planner → Actor → Critic** session loop (`agent-plan` → `agent-approve` → `agent-act`) with human spend gating, 3DGS outlier-view detection, episodic run traces and cross-session repair memory. Scene inspection, camera planning, screenshots, painting, consolidation, UV refinement, material maps, validation and PNG/KTX2 GLB export are available without browser clicking.
 
 ```sh
 npm ci
 npx playwright install chromium
 node automation/cli.mjs doctor --json
 node automation/cli.mjs screenshot --scene luxor --wait --json
-node automation/cli.mjs job-start --input @examples/automation/free-luxor.json --wait --json
+node automation/cli.mjs job-start --input @examples/automation/free-luxor.json --wait --ansi
+node automation/cli.mjs dcc-sync --target blender --glb samples/courtyard.glb --dry-run --json
 ```
 
 **[Follow the tutorial](docs/TUTORIAL.md)** for a free Luxor walkthrough, MCP client setup, custom geometry, and optional paid generation/resuming. The **[automation reference](docs/AUTOMATION.md)** documents every command and the machine-readable contracts. Paid operations require explicit `allowPaid:true`; the free example uses clay renders to exercise the GPU pipeline.
@@ -44,16 +45,17 @@ This comparison is against public upstream [`ba9ef76`](https://github.com/Patch-
 
 | Area | Public Trompe baseline | Potemkin additions and intended benefit |
 | --- | --- | --- |
-| Texture allocation | Uses the model's existing UV layout | Visibility-weighted and distance-weighted repacking; multi-page atlases and island splitting put more texels on surfaces players approach. |
-| Camera selection | Greedy coverage of reachable surfaces, roofs, aerial views and holes | Optional detail-gain scoring, surface-directed candidates and paintability estimates; measure useful pixels rather than coverage alone. |
-| Geometry fidelity | Prompts constrain the image model to the blockout | SAM-based face checks, a MoGe plane test, automatic shape naming and retry passes reduce paintings that replace a wall or prop with an invented scene. |
-| Repairs | Fill unpainted holes | Target low-detail defects, isolate difficult parts and small props, then fill remaining slivers from nearby same-part colors. |
+| Texture allocation | Uses the model's existing UV layout | Automatic `xatlas` unwrap with hand-authored UV seam preservation (`partitionUvCharts`); visibility-, distance-, cavity- and bot-path-weighted repacking; multi-page atlases and island splitting. |
+| Camera selection | Greedy coverage of reachable surfaces, roofs, aerial views and holes | Geodesic + Fisher adaptive probe-and-select (`--adaptive`), walkable nav-graph bot gaze importance (`--paths`), and discrete-asset Fibonacci/turntable `--mode object`. |
+| Geometry & seam fidelity | Prompts constrain the image model to the blockout; hard winner projection | SAM + MoGe fidelity checks, cavity/ridge wear conditioning, MRF view-label cuts, tangent-flow + Screened-Poisson stitching (`--consolidate`), Joint Bilateral Upsampling (`jbu.ts`), 3D-seam UV inpainting & delighting (`--uv-refine`), plus optional local `--texfusion`, `gaussianField` and `--sds-polish`. |
+| Repairs | Fill unpainted holes | Multi-metric Critic (`critic.ts`) with 3DGS outlier-view gating, targeted 3D repair boxes, isolated part/prop passes, and local same-part sliver fills. |
 | Floors | Ground mainly painted through scene views | Dedicated overhead passes, world-space material tiling and an optional protected detail layer address grazing-angle blur and inconsistent scale. |
-| Materials | Painted color with real-time scene lighting | Normal/roughness processing, AO baking, aligned height-derived normals and editable material presets add controllable surface response. |
-| References | Text descriptions and model inputs | Scene look files, reference photographs and tone normalization provide reusable, place-specific material guidance. |
-| Reliability | The documented baseline saves a run when it completes | Incremental per-view saves, resumable runs and browser recovery retain completed generation work. |
-| Automation | Browser API and individual scripts | Shared CLI/MCP schemas, persistent jobs, progress, cancellation, artifact resources and a free tutorial. |
-| Presentation | Authoring viewer and export | Capsule-based walking, standalone multi-scene website, streamed high-resolution textures and the Luxor relief/weathering/camera-effects viewer. |
+| Materials & AO | Painted color with real-time scene lighting | Intrinsic `$0` or PATINA height/normal/roughness/metallic/edge-wear maps, hybrid `Fast-SDF-AO` (`fast-sdf-ao.ts`) with `bent_normal.png` directional sky & Jimenez cone specular occlusion, and 8 material presets. |
+| Export & DCC | Uncompressed PNG glTF export | Optional UASTC + RFC 8878 Zstandard `KHR_texture_basisu` KTX2 GLBs (`format: 'ktx2'`, 4× lower GPU VRAM, >3× smaller disk size) streamed via `KTX2Loader`, plus live `blender-mcp` / `unreal-mcp` push (`dcc-sync`). |
+| Providers & cost | Cloud `fal` image endpoints | Pluggable `fal` + `$0` loopback `local` router (`ComfyUI`, `diffusers`, `Hunyuan3D-Paint`), hybrid `--local-tail` routing, and human-gated dollar budgets. |
+| Reliability | Saves a run when it completes | Incremental per-view saves, resumable runs and browser crash recovery retain completed generation work. |
+| Automation & reports | Browser API and individual scripts | Shared CLI/MCP schemas, persistent jobs, budgeted Planner → Actor → Critic loop, and streaming `@pierre/words` Markdown, Pele Mermaid, HTML & ANSI reports. |
+| Presentation | Authoring viewer and export | `@ui-sdk` Studio with 3D click-to-pin notes & live Monitor dock, capsule-based walking, contextual `Notes · I` walkthrough drawer, and the Luxor POM/weathering/camera-effects viewer. |
 
 Some options trade quality for memory, cost, or complexity. Surface-directed camera planning is experimental and is not always better. More atlas pages cannot recover detail absent from the generated views. The earlier measured examples in [ENGINE.md](ENGINE.md) are historical experiments, not a fresh benchmark against today's upstream or current model pricing.
 
@@ -94,14 +96,14 @@ cp .env.example .env.local       # add your own FAL_KEY for generation
 npm run dev
 ```
 
-Open the URL printed by Vite, normally **http://localhost:5178**. Choose a sample or a Y-up GLB (one without usable UVs is unwrapped on load), describe its materials, plan cameras, and then texture it. Named material parts improve the prompts. The local fal proxy reads the key server-side. Generation uses paid external model APIs; the included scene viewer, local map processing and ordinary tests do not need those calls.
+Open the URL printed by Vite, normally **http://localhost:5178**. Choose a sample or import a Y-up GLB (missing or stacked UVs unwrap automatically while preserving valid hand-authored charts), describe its materials, optionally click 3D surfaces with **Pin note** (`Look` tab) to attach localized art-direction instructions, plan cameras, and paint textures. On the **Critic** and **Material** tabs you can run multi-view seam consolidation, UV delighting/inpainting, 3DGS consistency checks, SDS hero polish, `Fast-SDF-AO` + intrinsic/PATINA PBR baking, export PNG or compressed `KTX2 (BasisU)` GLBs, and push PBR bundles directly to Blender or Unreal (**Sync to DCC**). Named material parts improve prompts. The local `fal` proxy reads `FAL_KEY` server-side, while `--provider local` routes to loopback ComfyUI/diffusers/Hunyuan3D-Paint at `$0`.
 
-A Luxor planning example:
+A Luxor planning example (or add `--consolidate --uv-refine --ao --pbr` when running):
 
 ```sh
 node scripts/texture.mjs --look samples/luxor.look.json --id luxor-new \
-  --first h3 --fill h3 --views 64 --cleanup 8 --finish \
-  --layout near --pages 4 --atlas 4096 --plan-only
+  --first h3 --fill h3 --views 64 --cleanup 8 --consolidate --uv-refine --finish \
+  --layout near --weights --paths --pages 4 --atlas 4096 --plan-only
 ```
 
 Review the plan before removing `--plan-only` to start paid generation. The public look file uses only the reference photos included with known licenses. It therefore differs from the historical input set used for the bundled scene. See [ENGINE.md](ENGINE.md) for all CLI options and generation workflows.
@@ -127,15 +129,16 @@ python3 -m unittest discover -s test -p 'height_maps_test.py'
 
 | Location | Contents |
 | --- | --- |
-| `src/core/` | Planning, geometry checks, atlas layout/projection, repairs, materials and export |
-| `src/providers/` | fal model integrations and the browser segmentation model |
-| `src/ui/`, `src/session.ts`, `src/api.ts` | Authoring interface, state and automation API |
-| `src/demo/loftwalk.js` | Loft walkthrough and shared camera-effect shaders |
-| `experiments/luxor-view/` | Editable temple viewer, POM, texture LOD, weathering and height processing |
+| `src/core/` | Planning (`planner.ts`, `adaptive-plan.ts`, `object-plan.ts`, `player-paths.ts`), geometry prepasses (`surface-weights.ts`), fidelity checks, UV unwrap/layout, MRF/Poisson/JBU consolidation (`consolidate.ts`, `jbu.ts`, `uv-refine.ts`), `Fast-SDF-AO` (`fast-sdf-ao.ts`, `ao.ts`), PBR maps, local spikes (`texfusion.ts`, `gaussian-field.ts`), and PNG/KTX2+Zstd export (`export.ts`, `ktx2.ts`, `zstd.ts`) |
+| `src/providers/` | `fal` + loopback `local` (`ComfyUI`, `diffusers`, `Hunyuan3D-Paint`) model router and in-browser SAM segmentation |
+| `src/ui/`, `src/session.ts`, `src/api.ts` | `@ui-sdk` Studio workspace, streaming `@pierre/words` + Pele Mermaid views, session state, and `window.trompe` / `window.agent` APIs |
+| `automation/` | Shared Zod CLI/MCP schemas, detached job worker, budgeted Planner → Actor → Critic agent (`agent.mjs`), Blender/Unreal MCP sync (`dcc.mjs`), and streaming Markdown/HTML/ANSI reports (`words.mjs`) |
+| `src/demo/` | Loft walkthrough (`loftwalk.js`), contextual `Notes · I` drawer (`walk-notes.js`), and shared camera-effect shaders |
+| `experiments/luxor-view/` | Editable temple viewer, POM, `KTX2Loader` + texture LOD streaming, weathering and height processing |
 | `experiments/material-lab/`, `experiments/benchmark/` | Material experiments and comparison tooling |
 | `samples/`, `references/` | Procedural geometry, look files and attributed photo references |
 | `deploy/potemkin3d/` | Complete baked loft/Luxor site and its shared menu |
-| `scripts/`, `test/` | Automation, measurement, building and tests |
+| `scripts/`, `test/` | CLI runners, measurement/validation scripts, scene builder, and unit/E2E tests |
 
 ## Limitations and provenance
 
@@ -150,6 +153,6 @@ python3 -m unittest discover -s test -p 'height_maps_test.py'
 
 The code is **Apache-2.0**, retaining [Trompe's license](https://github.com/Patch-gg/trompe/blob/ba9ef76687f57eef157057c7592d26e59c805992/LICENSE). See [LICENSE](LICENSE), [NOTICE](NOTICE), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Modified upstream source files identify the Potemkin changes. Patch's trademarks and branding remain Patch's; this project is not an official Patch release.
 
-Trompe was made by [Patch](https://patch.gg). Potemkin's additions are maintained here by [wrong-nebula](https://github.com/wrong-nebula). The engine uses Three.js, three-mesh-bvh, Vite, Playwright, Transformers.js and model services through fal. Individual models and services retain their own terms.
+Trompe was made by [Patch](https://patch.gg). Potemkin's additions are maintained here by [wrong-nebula](https://github.com/wrong-nebula). The engine uses Three.js, three-mesh-bvh, xatlas, `@ui-sdk`, `@pierre/words`, Pele, Vite, Playwright, Transformers.js, [Fast-SDF-AO](https://github.com/wrong-nebula/Fast-SDF-AO), and model services through `fal` or local loopback backends. Individual models and services retain their own terms.
 
 Photographs and fonts have separate licenses and attribution. The Luxor reference credits identify the included CC BY-SA photos, cropping and tone adjustments. A photo whose source/license was unknown and the hangar's film-reference images are excluded. Scene media and screenshot licensing are described in [ASSET_LICENSES.md](ASSET_LICENSES.md); the code license does not relicense third-party material.
