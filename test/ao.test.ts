@@ -5,9 +5,12 @@ import { describe, expect, it } from 'vitest';
 import {
   aoImage,
   bakeFastSdf,
+  bentNormalImage,
+  bentSpecularOcclusion,
   buildFastContactBvh,
   compareAoMethods,
   contactHitDistance,
+  decodeBentNormalImage,
   fastSdfTracedOpenness,
   finishAo,
   hemisphere,
@@ -199,5 +202,37 @@ describe('Fast-SDF-AO (Lipschitz isotropic R16F SDF + quantized SAH Contact BVH 
     const cmp = compareAoMethods(bvh, pts, { radius: 2.5, rays: 24, gridRes: 128, falloff: 'linear' });
     expect(cmp.fastSdfTraced.correlation).toBeGreaterThan(0.96);
     expect(cmp.fastSdfTraced.mae).toBeLessThan(0.035);
+  });
+
+  it('encodes/decodes bent_normal.png with gutter dilation and computes Jimenez cone specular occlusion', () => {
+    const s = 8;
+    const data = new Uint8ClampedArray(s * s).fill(180);
+    const bentNormals = new Float32Array(s * s * 3);
+    // Island interior at [2..5, 2..5] tilted toward an open side portal (0.6, 0.8, 0.0)
+    for (let y = 2; y <= 5; y++) {
+      for (let x = 2; x <= 5; x++) {
+        const i = 3 * (y * s + x);
+        bentNormals[i] = 0.6;
+        bentNormals[i + 1] = 0.8;
+        bentNormals[i + 2] = 0;
+      }
+    }
+    const ao: AoMap = { size: s, data, rays: 24, radius: 2.5, seconds: 0.01, bentNormals };
+    const img = bentNormalImage(ao, 2)!;
+    expect(img).toBeDefined();
+    // 1-texel gutter outside island (x = 1, y = 3) receives dilated portal direction instead of neutral [128, 255, 128]
+    const gutterIdx = 4 * (3 * s + 1);
+    expect(img[gutterIdx]).toBeGreaterThan(180);
+
+    const decoded = decodeBentNormalImage(img, s);
+    const insideIdx = 3 * (3 * s + 3);
+    expect(decoded[insideIdx]).toBeCloseTo(0.6, 1);
+    expect(decoded[insideIdx + 1]).toBeCloseTo(0.8, 1);
+
+    // Specular reflection aligned with open bent cone stays bright (~1.0); reflection into occluded ceiling is attenuated!
+    const openSpec = bentSpecularOcclusion([0.6, 0.8, 0], [0.6, 0.8, 0], 0.2);
+    const blockedSpec = bentSpecularOcclusion([-0.6, -0.8, 0], [0.6, 0.8, 0], 0.2);
+    expect(openSpec).toBeGreaterThan(0.98);
+    expect(blockedSpec).toBeLessThan(0.2);
   });
 });

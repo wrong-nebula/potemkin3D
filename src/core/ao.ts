@@ -10,6 +10,7 @@ import {
   type FastSdfFalloff,
 } from './fast-sdf-ao';
 import {
+  jointBilateralUpsampleRgba,
   jointBilateralUpsampleScalar,
   type AtlasGuide,
   type JointBilateralOptions,
@@ -204,6 +205,97 @@ export function aoImage(ao: AoMap): Uint8ClampedArray {
 }
 
 /**
+ * Encode `ao.bentNormals` (`3 * size * size` world-space unit vectors) as a dilated RGBA8 image (`(n * 0.5 + 0.5) * 255`)
+ * for WebGL2 sampling in `Viewer` and lossless persistence as `bent_normal.png`.
+ */
+export function bentNormalImage(ao: AoMap, gutter = 2): Uint8ClampedArray | undefined {
+  const bn = ao.bentNormals;
+  if (!bn || bn.length !== ao.size * ao.size * 3) return undefined;
+  const s = ao.size, N = s * s;
+  const out = new Uint8ClampedArray(N * 4);
+  let valid = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const bx = bn[3 * i], by = bn[3 * i + 1], bz = bn[3 * i + 2];
+    const len = Math.hypot(bx, by, bz);
+    if (len > 0.25) {
+      out[4 * i] = Math.max(0, Math.min(255, Math.round(((bx / len) * 0.5 + 0.5) * 255)));
+      out[4 * i + 1] = Math.max(0, Math.min(255, Math.round(((by / len) * 0.5 + 0.5) * 255)));
+      out[4 * i + 2] = Math.max(0, Math.min(255, Math.round(((bz / len) * 0.5 + 0.5) * 255)));
+      out[4 * i + 3] = 255;
+      valid[i] = 1;
+    } else {
+      out[4 * i] = 128; out[4 * i + 1] = 255; out[4 * i + 2] = 128; out[4 * i + 3] = 255;
+    }
+  }
+  for (let pass = 0; pass < gutter; pass++) {
+    const nextValid = new Uint8Array(valid);
+    const prev = new Uint8ClampedArray(out);
+    for (let y = 0; y < s; y++) {
+      for (let x = 0; x < s; x++) {
+        const i = y * s + x;
+        if (valid[i]) continue;
+        let sr = 0, sg = 0, sb = 0, k = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= s || ny >= s) continue;
+            const j = ny * s + nx;
+            if (!valid[j]) continue;
+            sr += prev[4 * j]; sg += prev[4 * j + 1]; sb += prev[4 * j + 2]; k++;
+          }
+        }
+        if (k) {
+          out[4 * i] = Math.round(sr / k);
+          out[4 * i + 1] = Math.round(sg / k);
+          out[4 * i + 2] = Math.round(sb / k);
+          nextValid[i] = 1;
+        }
+      }
+    }
+    valid = nextValid;
+  }
+  return out;
+}
+
+/** Decode an RGBA8 `bent_normal.png` image back into normalized `3 * size * size` world-space bent normals. */
+export function decodeBentNormalImage(rgba: Uint8ClampedArray | Uint8Array, size: number): Float32Array {
+  const N = size * size;
+  const out = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const x = (rgba[4 * i] / 255) * 2 - 1;
+    const y = (rgba[4 * i + 1] / 255) * 2 - 1;
+    const z = (rgba[4 * i + 2] / 255) * 2 - 1;
+    const len = Math.hypot(x, y, z);
+    if (len > 1e-4) {
+      out[3 * i] = x / len;
+      out[3 * i + 1] = y / len;
+      out[3 * i + 2] = z / len;
+    }
+  }
+  return out;
+}
+
+/**
+ * Jimenez et al. (SIGGRAPH 2016) cone-intersection specular occlusion factor in `[0, 1]` matching `Viewer`'s GLSL shader:
+ * attenuates indirect specular reflection when the reflection lobe (`reflWorld`) points away from the unoccluded bent cone.
+ */
+export function bentSpecularOcclusion(
+  reflWorld: [number, number, number],
+  bentWorld: [number, number, number],
+  roughness: number,
+): number {
+  const rl = Math.hypot(reflWorld[0], reflWorld[1], reflWorld[2]) || 1;
+  const bl = Math.hypot(bentWorld[0], bentWorld[1], bentWorld[2]) || 1;
+  const cosCone = Math.max(-1, Math.min(1, (reflWorld[0] * bentWorld[0] + reflWorld[1] * bentWorld[1] + reflWorld[2] * bentWorld[2]) / (rl * bl)));
+  const e0 = -0.15 - 0.65 * roughness;
+  const e1 = 0.45 + 0.45 * roughness;
+  const t = Math.max(0, Math.min(1, (cosCone - e0) / Math.max(1e-5, e1 - e0)));
+  const specOcc = t * t * (3 - 2 * t);
+  const specFade = 1 - roughness * 0.65;
+  return 1 * (1 - specFade) + specOcc * specFade;
+}
+
+/**
  * Bake ambient occlusion using `wrong-nebula/Fast-SDF-AO` (Quantized SAH Contact BVH + 1-Lipschitz isotropic `R16F` SDF
  * + Cranley-Patterson IGN + 2D Halton(2, 3) hemisphere stratification). Executes on WebGL2 GPU when available.
  */
@@ -232,10 +324,15 @@ export async function bakeFastSdfAo(
     const fullGeo = engine.atlas.texelGeometry(target);
     const fullGuide: AtlasGuide = { pos: fullGeo.pos, nrm: fullGeo.nrm, size: target };
     const upsampled = jointBilateralUpsampleScalar(baseMap.data, baseMap.guide, fullGuide);
+    const bnRgba = bentNormalImage(baseMap);
+    const upsampledBent = bnRgba
+      ? decodeBentNormalImage(jointBilateralUpsampleRgba(bnRgba, baseMap.guide, fullGuide, { coverage: false }), target)
+      : undefined;
     return {
       ...baseMap,
       size: target,
       data: upsampled,
+      ...(upsampledBent ? { bentNormals: upsampledBent } : {}),
       guide: fullGuide,
       seconds: (performance.now() - t0) / 1000,
     };

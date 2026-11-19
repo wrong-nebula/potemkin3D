@@ -31,6 +31,8 @@ Potemkin's CLI and stdio MCP server share validated command schemas and one exec
 | `agent-critique` | `potemkin_agent_critique` | Run the multi-metric Critic (`critique`) standalone on a saved run with diagnostic screenshots and zero model calls. |
 | `agent-status` | `potemkin_agent_status` | Read a budgeted Planner → Actor → Critic session, pending proposal, episodic trace and external MCP hooks. |
 | `agent-memory` | `potemkin_agent_memory` | Read cross-session memory of material presets, successful configs and repair pattern score gains. |
+| `dcc-sync` | `potemkin_dcc_sync` | Push exported PBR GLB + detached linear ORM / Normal / Height maps directly into a running `blender-mcp` or `unreal-mcp` server (or emit `dryRun` scripts). |
+| `docs`, `doc`, `report` | `potemkin_docs`, `potemkin_doc`, `potemkin_report` | Stream repo documentation and live/saved run reports as Markdown, HTML (`report.html`) or ANSI (`--ansi`). |
 
 ## Inputs and outputs
 
@@ -64,8 +66,8 @@ A workflow has `version:1`, `steps` (1–100), `allowPaid:false` by default, and
 | `bounds`, `weights`, `paths`, `plan`, `quote`, `projection` | Inspect geometry, surface weights, player-path bot gaze ranks, choose cameras, estimate model cost, control projection thresholds. `quote` requires a plan. |
 | `run`, `topUp` | Paint a new run or continue one; `saveAs` is required. |
 | `parts`, `ground`, `repair`, `groundNotes`, `props` | Target parts, floor tiles, regions, pinned notes or individual props. |
-| `consolidate`, `uvRefine`, `finish`, `save`, `export` | Stitch view seams, run position/normal-conditioned UV inpainting & delighting, fill unpainted slivers, persist a generation record, export the current GLB. `save` needs a real run; `export` also works after a clay self-test. |
-| `ao`, `pbr`, `exportPbr`, `nameParts` | Bake AO, generate full PBR channels (`intrinsic` or `patina`), export packed ORM and/or separate linear maps, or name shapes. |
+| `consolidate`, `uvRefine`, `texfusion`, `gaussianField`, `sdsPolish`, `finish`, `save`, `export` | Stitch view seams (MRF + tangent flow + Screened-Poisson + JBU), run 3D-seam UV inpainting & delighting, run synchronised local latent sampling (`texfusion`), fit a degree-1 SH 3DGS consistency/novel-view field (`gaussianField`), run importance-gated SDS hero polish (`sdsPolish`), fill unpainted slivers, persist a run, or export GLB (`format: 'png' | 'ktx2'`, `supercompress: true`). |
+| `ao`, `pbr`, `exportPbr`, `nameParts` | Bake hybrid `Fast-SDF-AO` (`mode: 'fast-sdf'`, `upsampleTo`, `bent_normal.png`), generate full PBR channels (`intrinsic` or `patina`), export packed ORM and/or separate linear maps, or name shapes. |
 | `materialPresets`, `materialMaps`, `floorDetail`, `floorDetailEnabled` | Assign presets, import aligned material maps and manage protected floor detail. `floorDetail.options:null` removes the detail layer. |
 | `walk`, `pick`, `snapshot` | Position a walking camera, ray-pick a surface point, or capture a specified camera. `walk.options:null` stops walking. |
 | `selfTest`, `measure`, `critique`, `validate`, `checkRun`, `promptTest` | Exercise GPU passes, measure sampling, score multi-view consistency/coverage/seams/residuals & prescribe targeted repairs, evaluate saved views, check geometry fidelity, compare prompts. |

@@ -50,6 +50,8 @@ export interface ConsolidateOptions {
   mrfSmooth?: number;
   /** Use tangent-plane & depth-weighted bilateral soft back-projection attention instead of hard point sampling (default false). */
   softBackproject?: boolean;
+  /** Optional list of outlier view indices (e.g. flagged by `fitSurfaceGaussianField` / `Critic`) whose weights are attenuated `0.05×`. */
+  dropViews?: number[];
   /** Minimum view cosine (default `engine.options.minCos`). */
   minCos?: number;
   /** Frame border margin skipped during back-projection (default `engine.options.frameMargin`). */
@@ -1010,19 +1012,25 @@ export function consolidateViews(
   for (let i = 0; i < size * size; i++) if (nrm[4 * i + 3] > 0.5) covered.push(i);
   const coveredIdx = Int32Array.from(covered);
 
+  const dropSet = opts.dropViews?.length ? new Set(opts.dropViews) : null;
   const depthRt = floatTarget(depthSize, depthSize, { count: 3, depth: true });
   const projected: ProjectedAtlasView[] = [];
   try {
-    for (const v of views) {
+    for (let idx = 0; idx < views.length; idx++) {
+      const v = views[idx];
       if (!v.comp?.length) continue;
       engine.views.renderGeometry(makeCamera(v.spec), depthRt);
       const gPos = engine.gpu.readF32(depthRt, 0, true);
-      projected.push(backProjectView(pos, nrm, size, coveredIdx, v.spec, gPos, depthSize, v.comp, engine.size, {
+      const pv = backProjectView(pos, nrm, size, coveredIdx, v.spec, gPos, depthSize, v.comp, engine.size, {
         detail: v.detail ?? 1,
         minCos: opts.minCos ?? engine.options.minCos,
         frameMargin: opts.frameMargin ?? engine.options.frameMargin,
         softKernel: opts.softBackproject,
-      }));
+      });
+      if (dropSet?.has(idx)) {
+        for (let i = 0; i < pv.weight.length; i++) pv.weight[i] *= 0.05;
+      }
+      projected.push(pv);
     }
   } finally {
     depthRt.dispose();

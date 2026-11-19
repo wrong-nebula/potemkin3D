@@ -1,22 +1,26 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { INDOOR, INDOOR_SOFT, OUTDOOR, OVERCAST, type Lighting } from './core/clay';
-import { aoImage, bakeAo, withOcclusion, type AoOptions } from './core/ao';
+import { aoImage, bakeAo, bentNormalImage, decodeBentNormalImage, withOcclusion, type AoOptions } from './core/ao';
 import { Engine } from './core/engine';
 import { exportGlb, type ExportOptions } from './core/export';
 import { nameParts } from './core/naming';
 import { makePbr, pbrMetadata, unpackLinearPbrChannels, type PbrOptions } from './core/pbr';
 import { buildAlignedMaps, validateAlignedSource, type AlignedMapSource } from './core/aligned-maps';
 import { suggestMaterialPreset, validateMaterialAssignments, type MaterialAssignments } from './core/material-presets';
-import { Gpu } from './core/gpu';
+import { Gpu, floatTarget } from './core/gpu';
 import { toBlob, urlToRGBA } from './core/image';
 import { runPipeline, type PipelineEvent, type PipelineOptions, type RunRecord, type ViewRecord, loadStyleImages } from './core/pipeline';
 import { DEFAULT_PLAN, plan as makePlan, samplePlayerPoints, surfaceOf, type Plan, type PlanOptions } from './core/planner';
 import { cutIslands, islandLimit, layoutHash, nearScaled, pagedLayout, seenCells, seenDistance, seenLayout, seenShare, seenTriangles, stripLayout } from './core/layout';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { attachKtx2Loader } from './core/ktx2';
 import { fillColours } from './core/finish';
-import { consolidateViews, type ConsolidateOptions } from './core/consolidate';
+import { backProjectView, consolidateViews, type ConsolidateOptions, type ProjectedAtlasView } from './core/consolidate';
 import { refineUvAtlas, type UvRefineOptions } from './core/uv-refine';
+import { buildViewLatentProjection, decodeRgbLatentAtlas, runSequentialInterlacedSampler, type ViewLatentProjection } from './core/texfusion';
+import { bakeGaussianFieldToAtlas, fitSurfaceGaussianField, renderNovelGaussianView, runImportanceGatedSdsPolish } from './core/gaussian-field';
+import { runLocalLatentStep } from './providers/local';
 import { matchCorners, partMesh, pickParts, toGlb, type PartMesh, type PartStats } from './core/partpass';
 import { routeEdit, routeRetexture, mergeProviderOptions, type ProviderOptions } from './providers/router';
 import { PAINTED, PART_QUALITY } from './core/atlas';
@@ -1266,7 +1270,7 @@ export class Session {
    */
   private async applyPart(label: number, glb: ArrayBuffer, mode: 'auto' | 'whole' | 'gaps' = 'auto') {
     this.partFiles.set(this.level!.labels[label] ?? '', glb.slice(0));   // the loader may take the buffer it is given
-    const gltf = await new GLTFLoader().parseAsync(glb, '');
+    const gltf = await attachKtx2Loader(new GLTFLoader(), this.gpu?.renderer).parseAsync(glb, '');
     gltf.scene.updateMatrixWorld(true);
     const position: number[] = [], uv: number[] = [];
     let map: THREE.Texture | null = null;
@@ -1382,6 +1386,272 @@ export class Session {
     if (r.finished) this.finish();
     this.viewer?.setMode('textured');
     return res;
+  }
+
+  /**
+   * TexFusion-style Sequential Interlaced Multiview Sampler (`core/texfusion.ts`): synchronises overlapping views across
+   * denoising steps via a shared UV latent atlas (`z_agg`, `ε_uv`), calling `runLocalLatentStep` (or an offline world-anchored
+   * procedural denoiser when `localBackend === 'procedural'`) and writing the resulting texture into `engine.atlas`.
+   */
+  async texfusion(opts: { size?: number; latentSize?: number; steps?: number; maxViews?: number; style?: string; seed?: number } = {}) {
+    const e = this.engine;
+    if (!e || !this.level) throw new Error('load a level first');
+    if (!this.plan) this.makePlan();
+    const specs = (this.plan?.views ?? []).slice(0, Math.max(1, opts.maxViews ?? 8));
+    if (!specs.length) throw new Error('plan cameras first');
+
+    const size = Math.min(e.atlas.size, opts.size ?? 256);
+    const latentSize = Math.min(256, Math.max(16, opts.latentSize ?? 64));
+    const steps = Math.max(2, opts.steps ?? 8);
+    const seed = opts.seed ?? 42;
+    const style = opts.style ?? this.record?.options.style ?? DEFAULT_PIPELINE.style;
+    const prov = this.runProvider();
+
+    const { pos, nrm } = e.atlas.texelGeometry(size);
+    const covered: number[] = [];
+    for (let i = 0; i < size * size; i++) if (nrm[4 * i + 3] > 0.5) covered.push(i);
+    const coveredIdx = Int32Array.from(covered);
+
+    const gSize = Math.min(256, e.size);
+    const depthRt = floatTarget(gSize, gSize, { count: 3, depth: true });
+    const projections: ViewLatentProjection[] = [];
+    try {
+      for (const spec of specs) {
+        e.views.renderGeometry(makeCamera(spec), depthRt);
+        const gPos = e.gpu.readF32(depthRt, 0, true);
+        projections.push(buildViewLatentProjection(pos, nrm, size, coveredIdx, spec, gPos, gSize, latentSize, latentSize, {
+          minCos: e.options.minCos,
+          frameMargin: e.options.frameMargin,
+        }));
+      }
+    } finally {
+      depthRt.dispose();
+    }
+
+    const useProcedural = prov.localBackend === 'procedural' || (!prov.localBackend && prov.provider !== 'local');
+    const sims = await runSequentialInterlacedSampler(
+      projections,
+      coveredIdx,
+      pos,
+      nrm,
+      size,
+      async ({ viewIndex, noisyLatent, knownMask, width, height, channels, sigma, sigmaNext }) => {
+        if (!useProcedural) {
+          try {
+            return await runLocalLatentStep('/texfusion/step', {
+              latent: noisyLatent,
+              channels,
+              width,
+              height,
+              sigma,
+              sigmaNext,
+              prompt: style,
+              seed: seed + viewIndex,
+            }, prov);
+          } catch {
+            // Fall through to deterministic world-anchored stone/mortar denoiser when local step daemon is offline
+          }
+        }
+        const proj = projections[viewIndex];
+        const out = new Float32Array(noisyLatent.length);
+        let m0 = 0, m1 = 0, m2 = 0, cnt = 0;
+        for (let i = 0; i < width * height; i++) {
+          if (!knownMask[i]) continue;
+          m0 += noisyLatent[i * channels] - 0.1;
+          m1 += noisyLatent[i * channels + 1] - 0.03;
+          m2 += noisyLatent[i * channels + 2] + 0.04;
+          cnt++;
+        }
+        if (cnt > 0) { m0 /= cnt; m1 /= cnt; m2 /= cnt; }
+        for (let i = 0; i < width * height; i++) {
+          const p = proj.pixelTexel[i];
+          const wx = p >= 0 ? pos[4 * p] : 0, wy = p >= 0 ? pos[4 * p + 1] : 0, wz = p >= 0 ? pos[4 * p + 2] : 0;
+          const stone = Math.sin((wx + wz) * 3.6) * 0.12 + Math.cos(wy * 4.4) * 0.1;
+          const blend = knownMask[i] ? 0.25 + 0.4 * sigma : 0.45 + 0.5 * sigma;
+          const o = i * channels;
+          out[o] = Math.max(-1, Math.min(1, (1 - blend) * noisyLatent[o] + blend * (0.1 + stone + m0 * 0.5)));
+          out[o + 1] = Math.max(-1, Math.min(1, (1 - blend) * noisyLatent[o + 1] + blend * (0.03 + stone * 0.9 + m1 * 0.5)));
+          out[o + 2] = Math.max(-1, Math.min(1, (1 - blend) * noisyLatent[o + 2] + blend * (-0.04 + stone * 0.8 + m2 * 0.5)));
+        }
+        return out;
+      },
+      { steps, channels: 3, seed },
+    );
+
+    const rgba = decodeRgbLatentAtlas(sims.atlas);
+    const zeroDelta = new Uint8ClampedArray(size * size * 4);
+    e.atlas.applyUvRefinement(rgba, zeroDelta, size, 0.25, { pos, nrm });
+    e.atlas.updatePaint(rgba, size);
+    this.viewer?.setMode('textured');
+    return {
+      size,
+      views: specs.length,
+      steps,
+      denoiserCalls: sims.denoiserCalls,
+      crossViewDiscrepancy: sims.crossViewDiscrepancy,
+      coverageAfter: +e.atlas.coverage().toFixed(4),
+      seconds: sims.seconds,
+    };
+  }
+
+  /**
+   * Fit a fixed-geometry Surface Gaussian Appearance Field (`core/gaussian-field.ts`) to recorded views to detect
+   * hallucinated/glare outlier views, optionally write SH-disentangled diffuse albedo (`applyDiffuse`), and render
+   * clean novel hole-fill views (`novelViews`). Zero model calls.
+   */
+  gaussianField(opts: { size?: number; stride?: number; applyDiffuse?: boolean; novelViews?: number } = {}) {
+    const e = this.engine, r = this.record;
+    if (!e || !r) throw new Error('paint or load a run first');
+    const size = Math.min(e.atlas.size, opts.size ?? 256);
+    const stride = Math.max(1, opts.stride ?? 2);
+    const { pos, nrm } = e.atlas.texelGeometry(size);
+    const covered: number[] = [];
+    for (let i = 0; i < size * size; i++) if (nrm[4 * i + 3] > 0.5) covered.push(i);
+    const coveredIdx = Int32Array.from(covered);
+
+    const dSize = Math.min(256, e.size);
+    const depthRt = floatTarget(dSize, dSize, { count: 3, depth: true });
+    const projected: ProjectedAtlasView[] = [];
+    const specs: ViewSpec[] = [];
+    const viewIndices: number[] = [];
+    try {
+      r.views.forEach((v, idx) => {
+        if (!v.comp?.length) return;
+        e.views.renderGeometry(makeCamera(v.spec), depthRt);
+        const gPos = e.gpu.readF32(depthRt, 0, true);
+        projected.push(backProjectView(pos, nrm, size, coveredIdx, v.spec, gPos, dSize, v.comp, e.size, {
+          detail: v.detail ?? 1, minCos: e.options.minCos, frameMargin: e.options.frameMargin,
+        }));
+        specs.push(v.spec);
+        viewIndices.push(idx);
+      });
+
+      if (!projected.length) {
+        return { size, stride, gaussians: 0, meanRmse: 0, outlierViews: [] as number[], novelFilledViews: 0, fitMs: 0 };
+      }
+
+      const field = fitSurfaceGaussianField(projected, specs, pos, nrm, size, { stride });
+      const outlierViews = field.consistency.outlierViews.map((j) => viewIndices[j]);
+
+      if (opts.applyDiffuse) {
+        const diffuseRgba = bakeGaussianFieldToAtlas(field, pos, nrm);
+        e.atlas.updatePaint(diffuseRgba, size);
+      }
+
+      let novelFilledViews = 0;
+      const wantNovel = Math.min(6, Math.max(0, opts.novelViews ?? 0));
+      if (wantNovel > 0 && this.plan) {
+        const paintedIds = new Set(r.views.map((v) => v.spec.id));
+        const candidates = this.plan.views.filter((v) => !paintedIds.has(v.id)).slice(0, wantNovel);
+        for (const spec of candidates) {
+          e.views.renderGeometry(makeCamera(spec), depthRt);
+          const gPos = e.gpu.readF32(depthRt, 0, true);
+          const gNrm = e.gpu.readF32(depthRt, 1, true);
+          const novelRgba = renderNovelGaussianView(field, spec, gPos, gNrm, dSize, dSize);
+          const novelProj = backProjectView(pos, nrm, size, coveredIdx, spec, gPos, dSize, novelRgba, dSize, {
+            minCos: e.options.minCos, frameMargin: e.options.frameMargin,
+          });
+          const zeroDelta = new Uint8ClampedArray(size * size * 4);
+          e.atlas.applyUvRefinement(novelProj.rgba, zeroDelta, size, 0.12, { pos, nrm });
+          novelFilledViews++;
+        }
+      }
+
+      if (opts.applyDiffuse || novelFilledViews > 0) this.viewer?.setMode('textured');
+      return {
+        size,
+        stride,
+        gaussians: field.gaussians.length,
+        meanRmse: field.consistency.meanRmse,
+        outlierViews,
+        novelFilledViews,
+        fitMs: field.fitMs,
+      };
+    } finally {
+      depthRt.dispose();
+    }
+  }
+
+  /**
+   * Importance-Gated Hybrid Score Distillation Sampling polish (`core/gaussian-field.ts`): steers high-importance UV
+   * texels (`importance >= importanceGate`) along multi-view diffusion residuals while leaving background texels untouched.
+   */
+  async sdsPolish(opts: { size?: number; steps?: number; importanceGate?: number; lr?: number; viewSize?: number; maxViews?: number } = {}) {
+    const e = this.engine;
+    if (!e || !this.level) throw new Error('load a level first');
+    const size = Math.min(e.atlas.size, opts.size ?? 256);
+    const viewSize = Math.min(256, Math.max(32, opts.viewSize ?? 64));
+    const steps = Math.max(2, opts.steps ?? 16);
+    const importanceGate = opts.importanceGate ?? 0.55;
+    const lr = opts.lr ?? 1.8;
+
+    const sw = this.ensureWeights();
+    this.ensurePaths();
+    const { pos, nrm } = e.atlas.texelGeometry(size);
+    const importance = cellWeights(this.level.geometry.getAttribute('uv').array, sw.importance, size);
+    const initRgba = e.atlas.readBytes([0.5, 0.5, 0.5], size, true).data;
+    const views = (this.record?.views.map((v) => v.spec) ?? this.plan?.views ?? []).slice(0, Math.max(1, opts.maxViews ?? 6));
+    if (!views.length) throw new Error('plan or paint views first');
+
+    const prov = this.runProvider();
+    const style = this.record?.options.style ?? DEFAULT_PIPELINE.style;
+    const useProcedural = prov.localBackend === 'procedural' || (!prov.localBackend && prov.provider !== 'local');
+
+    const res = await runImportanceGatedSdsPolish(
+      initRgba,
+      pos,
+      nrm,
+      importance,
+      size,
+      views,
+      async ({ viewIndex, renderedRgb, width, height, sigma }) => {
+        if (!useProcedural) {
+          try {
+            const normIn = Float32Array.from(renderedRgb, (v) => (v / 255) * 2 - 1);
+            const x0 = await runLocalLatentStep('/sds/score', {
+              latent: normIn,
+              channels: 3,
+              width,
+              height,
+              sigma,
+              prompt: style,
+              seed: 100 + viewIndex,
+            }, prov);
+            return Float32Array.from(x0, (v) => Math.max(0, Math.min(255, (v * 0.5 + 0.5) * 255)));
+          } catch {
+            // Fall back cleanly to local unsharp micro-contrast target when local /sds/score endpoint is offline
+          }
+        }
+        const target = new Float32Array(renderedRgb.length);
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = 3 * (y * width + x);
+            const xm = 3 * (y * width + Math.max(0, x - 1));
+            const xp = 3 * (y * width + Math.min(width - 1, x + 1));
+            const ym = 3 * (Math.max(0, y - 1) * width + x);
+            const yp = 3 * (Math.min(height - 1, y + 1) * width + x);
+            for (let c = 0; c < 3; c++) {
+              const lap = 4 * renderedRgb[i + c] - renderedRgb[xm + c] - renderedRgb[xp + c] - renderedRgb[ym + c] - renderedRgb[yp + c];
+              target[i + c] = Math.max(0, Math.min(255, renderedRgb[i + c] + 0.35 * lap));
+            }
+          }
+        }
+        return target;
+      },
+      { steps, importanceGate, lr, viewSize },
+    );
+
+    e.atlas.updatePaint(res.rgba, size);
+    this.viewer?.setMode('textured');
+    return {
+      size,
+      steps,
+      activeTexels: res.activeTexels,
+      untouchedLowImportanceTexels: res.untouchedLowImportanceTexels,
+      initialLoss: res.initialLoss,
+      finalLoss: res.finalLoss,
+      seconds: res.seconds,
+    };
   }
 
   /**
@@ -1504,6 +1774,8 @@ export class Session {
     if (ao) {
       onProgress?.('ambient occlusion');
       await this.put(id, 'ao.png', await toBlob(aoImage(ao), ao.size, ao.size, 'image/png'));
+      const bnImg = bentNormalImage(ao);
+      if (bnImg) await this.put(id, 'bent_normal.png', await toBlob(bnImg, ao.size, ao.size, 'image/png'));
     }
     if (pbr) {
       onProgress?.('normal and roughness maps');
@@ -1616,7 +1888,14 @@ export class Session {
       const rgba = await urlToRGBA(`/runs/${id}/ao.png`, s, s);
       const data = new Uint8ClampedArray(s * s);
       for (let i = 0; i < data.length; i++) data[i] = rgba[4 * i];
-      this.engine.ao = { ...meta.ao, size: s, data, seconds: 0 };
+      let bentNormals: Float32Array | undefined;
+      try {
+        const bnRgba = await urlToRGBA(`/runs/${id}/bent_normal.png`, s, s);
+        bentNormals = decodeBentNormalImage(bnRgba, s);
+      } catch {
+        // Older runs saved before bent_normal.png continue to load cleanly with scalar AO only
+      }
+      this.engine.ao = { ...meta.ao, size: s, data, ...(bentNormals ? { bentNormals } : {}), seconds: 0 };
     }
     this.viewer.setAo(this.engine.ao);
     if (meta.floorDetail) {

@@ -64,6 +64,9 @@ const { values: a } = parseArgs({
     parts: { type: 'string', default: '0' },       // max parts to texture on their own where the painting left them unfinished ($0.30 each)
     consolidate: { type: 'boolean', default: false }, // confidence-weighted tangent-flow + Screened-Poisson atlas stitch after views (no model call)
     'uv-refine': { type: 'boolean', default: false }, // Paint3D-style position/normal-conditioned UV inpainting + intrinsic delighting & importance-gated sharpening
+    texfusion: { type: 'boolean', default: false }, // TexFusion Sequential Interlaced Multiview Sampler across overlapping views (local provider)
+    'gaussian-field': { type: 'boolean', default: false }, // Fixed-geometry Surface Gaussian Appearance Field consistency check & glare disentangling
+    'sds-polish': { type: 'boolean', default: false }, // Importance-gated hybrid Score Distillation Sampling polish on hero surfaces
     finish: { type: 'boolean', default: false },
     diffuse: { type: 'boolean', default: false },
     notes: { type: 'string' },     // a JSON file of things to add at spots in the level: [{ text: 'add a poster here', at: [x, y, z], size: 1.2 }] in JSON (models that read notes only: h3)
@@ -269,6 +272,8 @@ try {
     const res = await page.evaluate((o) => (o.resume ? window.trompe.topUp(o.opts, undefined, o.id) : window.trompe.run(o.opts, undefined, o.id)),
       { resume: !!a.resume, opts, id });
     log(`run: ${JSON.stringify(res)}`);
+    if (a.texfusion) log(`texfusion: ${JSON.stringify(await page.evaluate(() => window.trompe.texfusion()))}`);
+    if (a['gaussian-field']) log(`gaussian-field: ${JSON.stringify(await page.evaluate(() => window.trompe.gaussianField({ applyDiffuse: true })))}`);
     if (a.consolidate) log(`consolidate: ${JSON.stringify(await page.evaluate(() => window.trompe.consolidate()))}`);
     if (a.ao) log(`ambient occlusion: ${JSON.stringify(await page.evaluate((size) => window.trompe.ao({ size }), +a['ao-size']))}`);
     if (a.pbr) log(`maps: ${JSON.stringify(await page.evaluate(([size, mode]) => window.trompe.pbr({ size, mode }), [+a['pbr-size'], a['pbr-mode']]))}`);
@@ -276,8 +281,9 @@ try {
     if (+a.props > 0) log(`prop pass: ${JSON.stringify(await page.evaluate(([max, runId]) => window.trompe.props({ max }, undefined, runId), [+a.props, id]))}`);
     if (+a.parts > 0) log(`part pass: ${JSON.stringify(await page.evaluate(([max, runId]) => window.trompe.parts({ max }, undefined, runId), [+a.parts, id]))}`);
     if (a['uv-refine']) log(`uv-refine: ${JSON.stringify(await page.evaluate(() => window.trompe.uvRefine()))}`);
+    if (a['sds-polish']) log(`sds-polish: ${JSON.stringify(await page.evaluate(() => window.trompe.sdsPolish()))}`);
     if (a.finish) log(`finishing fill: ${JSON.stringify(await page.evaluate(() => window.trompe.finish()))}`);
-    if (a.consolidate || a['uv-refine'] || a.ao || a.pbr || a.finish || +a.parts > 0 || +a.ground > 0 || +a.props > 0) await page.evaluate((runId) => window.trompe.save(runId), id);
+    if (a.texfusion || a['gaussian-field'] || a.consolidate || a['uv-refine'] || a['sds-polish'] || a.ao || a.pbr || a.finish || +a.parts > 0 || +a.ground > 0 || +a.props > 0) await page.evaluate((runId) => window.trompe.save(runId), id);
     const rep = writeRunReportFiles(id);
     log(`saved to runs/${id}/${rep ? ` (${rep.htmlPath})` : ''}`);
     if (a.ansi && rep) process.stdout.write(markdownToAnsi(rep.markdown, { width: process.stdout.columns || 88 }));

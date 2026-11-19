@@ -1,4 +1,7 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
+import * as THREE from 'three';
+import type { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import {
   createDefaultContainer,
   KHR_DF_MODEL_UASTC,
@@ -6,8 +9,13 @@ import {
   KHR_DF_PRIMARIES_UNSPECIFIED,
   KHR_DF_TRANSFER_LINEAR,
   KHR_DF_TRANSFER_SRGB,
+  KHR_SUPERCOMPRESSION_NONE,
+  KHR_SUPERCOMPRESSION_ZSTD,
   write,
 } from 'three/examples/jsm/libs/ktx-parse.module.js';
+import { zstdCompress } from './zstd';
+
+export { zstdCompress };
 
 /**
  * Pure-TypeScript Khronos KTX 2.0 UASTC 4×4 block encoder & glTF 2.0 `KHR_texture_basisu` container rewriter.
@@ -29,6 +37,8 @@ export interface UastcEncodeOptions {
   srgb?: boolean;
   /** Generate a box-filtered mipmap pyramid down to 1×1 (default false). */
   mipmaps?: boolean;
+  /** Apply RFC 8878 Zstandard per-level supercompression (`KHR_SUPERCOMPRESSION_ZSTD = 1`, default true). */
+  supercompress?: boolean;
 }
 
 function srgbToLinear(c: number): number {
@@ -279,6 +289,7 @@ export function encodeUastcKtx2(
 ): Uint8Array {
   const srgb = opts.srgb ?? false;
   const mipmaps = opts.mipmaps ?? false;
+  const supercompress = opts.supercompress ?? true;
 
   let hasAlpha = false;
   for (let i = 3; i < rgba.length; i += 4) {
@@ -290,7 +301,10 @@ export function encodeUastcKtx2(
   let cw = width, ch = height;
   while (true) {
     const encoded = encodeUastcLevel(curData, cw, ch);
-    levels.push({ levelData: encoded, uncompressedByteLength: encoded.byteLength });
+    levels.push({
+      levelData: supercompress ? zstdCompress(encoded) : encoded,
+      uncompressedByteLength: encoded.byteLength,
+    });
     if (!mipmaps || (cw === 1 && ch === 1)) break;
     const next = downsampleMip2x(curData, cw, ch, srgb);
     curData = next.data;
@@ -307,7 +321,7 @@ export function encodeUastcKtx2(
   container.layerCount = 0;
   container.faceCount = 1;
   container.levelCount = levels.length;
-  container.supercompressionScheme = 0;
+  container.supercompressionScheme = supercompress ? KHR_SUPERCOMPRESSION_ZSTD : KHR_SUPERCOMPRESSION_NONE;
   container.levels = levels;
   container.dataFormatDescriptor = [
     {
@@ -452,4 +466,35 @@ export function rewriteGlbWithKtx2(glbBuffer: ArrayBuffer, textureByName: Map<st
     cursor += ch.byteLength;
   }
   return outBuf;
+}
+
+let sharedKtx2Loader: KTX2Loader | null = null;
+let sharedKtx2Detected = false;
+
+/**
+ * Attach a shared `KTX2Loader` (`KHR_texture_basisu` + `zstddec`) to a `GLTFLoader` when running in a browser Worker-capable
+ * environment, using `renderer` for hardware BC7 / ASTC 4×4 / ETC2 detection (or safe RGBA32 transcoding when omitted).
+ */
+export function attachKtx2Loader(gltfLoader: GLTFLoader, renderer?: THREE.WebGLRenderer | null): GLTFLoader {
+  if (typeof Worker === 'undefined' || typeof Blob === 'undefined') return gltfLoader;
+  if (!sharedKtx2Loader) {
+    sharedKtx2Loader = new KTX2Loader();
+    sharedKtx2Loader.setWorkerLimit(2);
+    // Safe RGBA32 fallback config before a WebGLRenderer is supplied
+    (sharedKtx2Loader as unknown as { workerConfig: Record<string, boolean> }).workerConfig = {
+      astcSupported: false,
+      astcHDRSupported: false,
+      etc1Supported: false,
+      etc2Supported: false,
+      dxtSupported: false,
+      bptcSupported: false,
+      pvrtcSupported: false,
+    };
+  }
+  if (renderer && !sharedKtx2Detected) {
+    sharedKtx2Loader.detectSupport(renderer);
+    sharedKtx2Detected = true;
+  }
+  gltfLoader.setKTX2Loader(sharedKtx2Loader);
+  return gltfLoader;
 }

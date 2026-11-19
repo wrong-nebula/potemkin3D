@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { OUTDOOR, sunDirection, type Lighting } from './clay';
-import { aoImage, type AoMap } from './ao';
+import { aoImage, bentNormalImage, type AoMap } from './ao';
 import { ATLAS_GLSL } from './atlas';
 import type { Engine } from './engine';
 import type { PbrMaps } from './pbr';
@@ -103,8 +103,8 @@ function litMaterial(uniforms: Record<string, THREE.IUniform>) {
   m.defines = { USE_UV: '' };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = 'varying vec3 vRevealWorld;\n' + shader.vertexShader.replace('#include <project_vertex>',
-      '#include <project_vertex>\n  vRevealWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.vertexShader = 'varying vec3 vRevealWorld;\nvarying vec3 vBentWorldNormal;\n' + shader.vertexShader.replace('#include <project_vertex>',
+      '#include <project_vertex>\n  vRevealWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vBentWorldNormal = normalize(mat3(modelMatrix) * objectNormal);');
     shader.fragmentShader = /* glsl */ `
 uniform highp sampler2DArray atlas;
 uniform highp sampler2DArray before;
@@ -113,9 +113,15 @@ uniform vec3 revealOrigin;
 uniform float revealRadius;
 uniform float revealBand;
 uniform vec3 accent;
+uniform sampler2D bentNormalTex;
+uniform float useBentNormal;
+uniform vec3 skyBentColor;
+uniform vec3 groundBentColor;
 varying vec3 vRevealWorld;
+varying vec3 vBentWorldNormal;
 ${ATLAS_GLSL}
-` + shader.fragmentShader.replace('#include <map_fragment>', /* glsl */ `
+` + shader.fragmentShader
+      .replace('#include <map_fragment>', /* glsl */ `
   vec4 tA = atlasTexel(atlas, vUv);
   vec3 tCol = tA.rgb;
   float tAlpha = tA.a > 0.0 ? 1.0 : 0.0;
@@ -127,7 +133,29 @@ ${ATLAS_GLSL}
     tAlpha = max(tB.a > 0.0 ? 1.0 : (tA.a > 0.0 ? t : 0.0), edge);
   }
   if (tAlpha < 0.5) discard;
-  diffuseColor.rgb = sRGBTransferEOTF(vec4(tCol, 1.0)).rgb;`);
+  diffuseColor.rgb = sRGBTransferEOTF(vec4(tCol, 1.0)).rgb;`)
+      .replace('#include <aomap_fragment>', /* glsl */ `
+  #include <aomap_fragment>
+  if (useBentNormal > 0.5) {
+    vec3 bentWorld = texture2D(bentNormalTex, vUv).xyz * 2.0 - 1.0;
+    float bentLen = length(bentWorld);
+    if (bentLen > 0.25) {
+      bentWorld /= bentLen;
+      float geomSky = clamp(normalize(vBentWorldNormal).y * 0.5 + 0.5, 0.0, 1.0);
+      float bentSky = clamp(bentWorld.y * 0.5 + 0.5, 0.0, 1.0);
+      vec3 geomTint = max(mix(groundBentColor, skyBentColor, geomSky), vec3(0.08));
+      vec3 bentTint = mix(groundBentColor, skyBentColor, bentSky);
+      reflectedLight.indirectDiffuse *= clamp(bentTint / geomTint, vec3(0.45), vec3(1.55));
+      vec3 worldShadingN = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
+      vec3 worldViewDir = normalize(cameraPosition - vRevealWorld);
+      vec3 reflWorld = reflect(-worldViewDir, worldShadingN);
+      float cosCone = clamp(dot(reflWorld, bentWorld), -1.0, 1.0);
+      float specOcc = smoothstep(-0.15 - 0.65 * material.roughness, 0.45 + 0.45 * material.roughness, cosCone);
+      float specFade = 1.0 - material.roughness * 0.65;
+      reflectedLight.indirectSpecular *= mix(1.0, specOcc, specFade);
+      reflectedLight.directSpecular *= mix(1.0, max(0.35, specOcc), 0.35 * specFade);
+    }
+  }`);
   };
   return m;
 }
@@ -164,6 +192,7 @@ export class Viewer {
   private orbitPose?: { position: THREE.Vector3; target: THREE.Vector3; fov: number };
   private pbrTextures: THREE.DataTexture[] = [];
   private aoTexture?: THREE.DataTexture;
+  private bentNormalTexture?: THREE.DataTexture;
   /** Strength of the normal map in the lit display (0 = flat). */
   relief = 1;
   private floorDetail?: FloorDetail;
@@ -185,6 +214,8 @@ export class Viewer {
         atlas: { value: engine.atlas.texture }, atlasGrid: { value: engine.atlas.grid }, before: { value: null }, useBefore: { value: 0 },
         revealOrigin: { value: new THREE.Vector3() }, revealRadius: { value: 0 }, revealBand: { value: 5 },
         accent: { value: new THREE.Vector3(PINK.r, PINK.g, PINK.b) },
+        bentNormalTex: { value: null }, useBentNormal: { value: 0 },
+        skyBentColor: { value: new THREE.Color(0xc4d6f2) }, groundBentColor: { value: new THREE.Color(0xa09e9a) },
       },
     });
     this.litMat = litMaterial(this.texMaterial.uniforms);
@@ -233,6 +264,7 @@ export class Viewer {
     cam.updateProjectionMatrix();
     this.sun.shadow.needsUpdate = true;
     this.hemi.intensity = l.skyIntensity;
+    this.texMaterial.uniforms.skyBentColor.value.setRGB(...l.sky);
     const skyU = (this.sky.mesh.material as THREE.ShaderMaterial).uniforms;
     skyU.fallbackTop.value = new THREE.Color(...l.sky);
     skyU.fallbackBottom.value = new THREE.Color(...l.sky).lerp(new THREE.Color(1, 1, 1), 0.55);   // haze toward the horizon
@@ -315,10 +347,12 @@ export class Viewer {
     this.dirty = true;
   }
 
-  /** Use (or drop) the baked ambient occlusion in the lit display: it dims the sky light in corners and under things. */
+  /** Use (or drop) the baked ambient occlusion + directional bent normals in the lit display. */
   setAo(ao: AoMap | undefined) {
     this.aoTexture?.dispose();
     this.aoTexture = undefined;
+    this.bentNormalTexture?.dispose();
+    this.bentNormalTexture = undefined;
     if (ao) {
       const t = new THREE.DataTexture(new Uint8Array(aoImage(ao).buffer), ao.size, ao.size, THREE.RGBAFormat);
       t.generateMipmaps = true;
@@ -326,8 +360,20 @@ export class Viewer {
       t.magFilter = THREE.LinearFilter;
       t.needsUpdate = true;
       this.aoTexture = t;
+
+      const bnImg = bentNormalImage(ao);
+      if (bnImg) {
+        const bt = new THREE.DataTexture(new Uint8Array(bnImg.buffer, bnImg.byteOffset, bnImg.byteLength), ao.size, ao.size, THREE.RGBAFormat);
+        bt.generateMipmaps = true;
+        bt.minFilter = THREE.LinearMipmapLinearFilter;
+        bt.magFilter = THREE.LinearFilter;
+        bt.needsUpdate = true;
+        this.bentNormalTexture = bt;
+      }
     }
     this.litMat.aoMap = this.aoTexture ?? null;
+    this.texMaterial.uniforms.bentNormalTex.value = this.bentNormalTexture ?? null;
+    this.texMaterial.uniforms.useBentNormal.value = this.bentNormalTexture ? 1 : 0;
     this.litMat.needsUpdate = true;
     this.dirty = true;
   }

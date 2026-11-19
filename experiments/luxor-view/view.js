@@ -13,6 +13,7 @@
 // file dropped on the page), laid over the finished frame before it is sharpened.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { LUTCubeLoader } from 'three/addons/loaders/LUTCubeLoader.js';
 import { acceleratedRaycast, computeBoundsTree } from 'three-mesh-bvh';
 import { markEdges } from './edges.js';
@@ -473,7 +474,7 @@ fetch('./luxor-gold.cube').then((r) => (r.ok ? r.text() : Promise.reject(new Err
 
 resize();
 SPOTS[1][1]();
-new GLTFLoader().load('./level_2k.glb', (gltf) => {
+new GLTFLoader().setKTX2Loader(new KTX2Loader().detectSupport(renderer)).load('./level_2k.glb', (gltf) => {
   level = gltf.scene;
   const aniso = renderer.capabilities.getMaxAnisotropy();
   // which edges can chip is worked out before anything else reads the geometry (it re-lays the triangles)

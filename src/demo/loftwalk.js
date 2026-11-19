@@ -14,6 +14,7 @@
 // room, with a walker's bob and sway. T starts and stops a tour that walks a loop through the run's player spots.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { mountWalkNotesShell } from './walk-notes-shell.js';
@@ -885,11 +886,13 @@ async function start() {
   const want = query.get('tex') ?? (big ? '8k' : '4k');
   const files = [...(want === '8k' ? ['level_8k.glb'] : []), 'level_4k.glb', 'level_textured.glb'];
   let gltf = null;
+  const ktx2Loader = new KTX2Loader().detectSupport(renderer);
+  const gltfLoader = new GLTFLoader().setKTX2Loader(ktx2Loader);
   for (const file of files) {
     const head = await fetch(`${BASE}${RUN}/${file}`, { method: 'HEAD' }).catch(() => null);
     if (!head?.ok || /text\/html/.test(head.headers.get('content-type') ?? '')) continue;
     msg.textContent = `loading the loft (${file.includes('8k') ? '8192' : '4096'} px of texture)…`;
-    gltf = await new GLTFLoader().loadAsync(`${BASE}${RUN}/${file}`);
+    gltf = await gltfLoader.loadAsync(`${BASE}${RUN}/${file}`);
     break;
   }
   if (!gltf) throw new Error('no level file found');
@@ -898,9 +901,11 @@ async function start() {
   gltf.scene.traverse((o) => { if (o.isMesh) meshes.push(o); });
   const tuned = (map) => {
     map.colorSpace = THREE.NoColorSpace;   // the shader takes the picture's values as they are and makes light of them itself
-    // smaller copies of the texture for surfaces seen small or at a slant: without them brick and mesh shimmer
-    map.generateMipmaps = true;
-    map.minFilter = THREE.LinearMipmapLinearFilter;
+    if (!map.isCompressedTexture) {
+      // smaller copies of the texture for surfaces seen small or at a slant: without them brick and mesh shimmer
+      map.generateMipmaps = true;
+    }
+    map.minFilter = map.isCompressedTexture && (map.mipmaps?.length ?? 0) <= 1 ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
     map.magFilter = THREE.LinearFilter;
     map.anisotropy = renderer.capabilities.getMaxAnisotropy();
     map.needsUpdate = true;

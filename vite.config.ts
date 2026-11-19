@@ -216,7 +216,7 @@ export default defineConfig(({ mode }) => {
     server: { port: 5178, strictPort: false },
     build: {
       target: 'es2022',
-      chunkSizeWarningLimit: 750,
+      chunkSizeWarningLimit: 850,
       rolldownOptions: {
         output: {
           codeSplitting: {

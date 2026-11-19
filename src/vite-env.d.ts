@@ -6,6 +6,8 @@ declare module 'three/examples/jsm/libs/ktx-parse.module.js' {
   export const KHR_DF_PRIMARIES_UNSPECIFIED: number;
   export const KHR_DF_TRANSFER_SRGB: number;
   export const KHR_DF_TRANSFER_LINEAR: number;
+  export const KHR_SUPERCOMPRESSION_NONE: number;
+  export const KHR_SUPERCOMPRESSION_ZSTD: number;
   export interface KTX2Sample {
     bitOffset: number;
     bitLength: number;
@@ -42,4 +44,11 @@ declare module 'three/examples/jsm/libs/ktx-parse.module.js' {
   export function createDefaultContainer(): KTX2Container;
   export function write(container: KTX2Container): Uint8Array;
   export function read(data: Uint8Array): KTX2Container;
+}
+
+declare module 'three/examples/jsm/libs/zstddec.module.js' {
+  export class ZSTDDecoder {
+    init(): Promise<void>;
+    decode(array: Uint8Array, uncompressedSize?: number): Uint8Array;
+  }
 }

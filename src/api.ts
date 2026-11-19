@@ -199,6 +199,18 @@ export function makeApi(session: Session) {
     uvRefine(opts: UvRefineOptions = {}) {
       return session.uvRefine(opts);
     },
+    /** TexFusion-style Sequential Interlaced Multiview Sampler across overlapping views (core/texfusion.ts). */
+    texfusion(opts: Parameters<Session['texfusion']>[0] = {}) {
+      return session.texfusion(opts);
+    },
+    /** Fixed-geometry Surface Gaussian Appearance Field consistency check, glare disentangling & novel-view fill (core/gaussian-field.ts). */
+    gaussianField(opts: Parameters<Session['gaussianField']>[0] = {}) {
+      return session.gaussianField(opts);
+    },
+    /** Importance-Gated Hybrid Score Distillation Sampling polish on hero surfaces (core/gaussian-field.ts). */
+    sdsPolish(opts: Parameters<Session['sdsPolish']>[0] = {}) {
+      return session.sdsPolish(opts);
+    },
     /** The finishing fill: what no view painted takes its part's colours (core/finish.ts). No model call. */
     finish() {
       return session.finish();

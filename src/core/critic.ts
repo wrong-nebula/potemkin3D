@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { PAINTED } from './atlas';
 import { sunDirection } from './clay';
-import { backProjectView, seamMetric, surfaceLinks, type SeamScore } from './consolidate';
+import { backProjectView, seamMetric, surfaceLinks, type ProjectedAtlasView, type SeamScore } from './consolidate';
 import { defectMap, fullDetail } from './defects';
 import type { Engine } from './engine';
+import { fitSurfaceGaussianField } from './gaussian-field';
 import { floatTarget } from './gpu';
 import { seenCells } from './layout';
 import type { RunMetrics } from './metrics';
@@ -45,6 +46,8 @@ export interface MultiViewScore {
   rmse: number;
   /** Share of covered texels observed by `>= 2` views (`0..1`). */
   overlapShare: number;
+  /** Indices of recorded views flagged as appearance outliers (`> 1.75×` median SH-disentangled residual) by `fitSurfaceGaussianField`. */
+  outlierViews?: number[];
 }
 
 export interface ScreenshotArtifactScore {
@@ -210,6 +213,9 @@ export function evaluateMultiViewAndSeams(
   const sumW = new Float32Array(N);
   const sumR = new Float32Array(N), sumG = new Float32Array(N), sumB = new Float32Array(N);
   const sumR2 = new Float32Array(N), sumG2 = new Float32Array(N), sumB2 = new Float32Array(N);
+  const projectedViews: ProjectedAtlasView[] = [];
+  const projectedSpecs: ViewSpec[] = [];
+  const projectedRecordIndices: number[] = [];
 
   try {
     record.views.forEach((v, k) => {
@@ -219,6 +225,9 @@ export function evaluateMultiViewAndSeams(
       const proj = backProjectView(pos, nrm, s, coveredIdx, v.spec, gPos, dSize, v.comp, engine.size, {
         detail: v.detail ?? 1, minCos: engine.options.minCos, frameMargin: engine.options.frameMargin,
       });
+      projectedViews.push(proj);
+      projectedSpecs.push(v.spec);
+      projectedRecordIndices.push(k);
       for (const i of coveredIdx) {
         const w = proj.weight[i];
         if (w <= 0 || proj.rgba[4 * i + 3] === 0) continue;
@@ -235,6 +244,14 @@ export function evaluateMultiViewAndSeams(
     });
   } finally {
     depthRt.dispose();
+  }
+
+  let outlierViews: number[] = [];
+  if (projectedViews.length >= 3) {
+    const gf = fitSurfaceGaussianField(projectedViews, projectedSpecs, pos, nrm, s, {
+      stride: Math.max(2, Math.round(s / 64)),
+    });
+    outlierViews = gf.consistency.outlierViews.map((j) => projectedRecordIndices[j]);
   }
 
   let overlap = 0, varAcc = 0, wAcc = 0;
@@ -254,6 +271,7 @@ export function evaluateMultiViewAndSeams(
     consistency: +Math.max(0, Math.min(1, 1 - rmse)).toFixed(4),
     rmse: +rmse.toFixed(4),
     overlapShare: +(overlap / coveredIdx.length).toFixed(4),
+    ...(outlierViews.length ? { outlierViews } : {}),
   };
 
   const current = engine.atlas.readBytes([0.5, 0.5, 0.5], s, true).data;
@@ -424,14 +442,23 @@ export function critiqueRun(
   const actions: RepairAction[] = [];
 
   if (((seam.boundaryEdges > 20 && seam.ratio > th.maxSeamRatio) ||
-       (multiView.overlapShare > 0.05 && multiView.consistency < th.minMultiViewConsistency)) && !record.consolidated) {
+       (multiView.overlapShare > 0.05 && multiView.consistency < th.minMultiViewConsistency) ||
+       (multiView.outlierViews?.length ?? 0) > 0) && !record.consolidated) {
+    const outlierNote = multiView.outlierViews?.length ? `; outlier views [${multiView.outlierViews.join(', ')}] attenuated` : '';
     actions.push({
       op: 'consolidate',
-      reason: seam.ratio > th.maxSeamRatio
+      reason: (seam.ratio > th.maxSeamRatio
         ? `cross-view seam ratio ${seam.ratio.toFixed(2)} exceeds ${th.maxSeamRatio.toFixed(2)} across ${seam.boundaryEdges} boundary edges`
-        : `multi-view consistency ${multiView.consistency.toFixed(3)} below ${th.minMultiViewConsistency.toFixed(2)}`,
+        : multiView.outlierViews?.length
+          ? `3DGS consistency check flagged outlier views [${multiView.outlierViews.join(', ')}]`
+          : `multi-view consistency ${multiView.consistency.toFixed(3)} below ${th.minMultiViewConsistency.toFixed(2)}`) + outlierNote,
       estimatedCalls: 0,
-      params: { size: Math.min(1024, engine.atlas.size), flow: true, lambda: 0.02 },
+      params: {
+        size: Math.min(1024, engine.atlas.size),
+        flow: true,
+        lambda: 0.02,
+        ...(multiView.outlierViews?.length ? { dropViews: multiView.outlierViews } : {}),
+      },
     });
   }
 

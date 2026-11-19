@@ -1,6 +1,7 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { attachKtx2Loader } from './ktx2';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH } from 'three-mesh-bvh';
 import { splitParts, type Part } from './parts';
@@ -152,7 +153,7 @@ export function setTriangles(level: Level, t: { position: Float32Array; normal: 
  *   of refusing them: for a level that will be unwrapped (core/unwrap.ts)
  */
 export async function loadLevel(source: string | ArrayBuffer, name = 'level', opts: { allowMissingUV?: boolean } = {}): Promise<Level> {
-  const loader = new GLTFLoader();
+  const loader = attachKtx2Loader(new GLTFLoader());
   const gltf = typeof source === 'string'
     ? await loader.loadAsync(source)
     : await loader.parseAsync(source, '');

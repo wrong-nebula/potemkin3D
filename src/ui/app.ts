@@ -968,6 +968,8 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   repairRunBtn.root.hidden = true;
   const consolidateBtn = makeButton('Stitch seams', () => runConsolidate());
   const uvRefineBtn = makeButton('Refine UVs', () => runUvRefine());
+  const gaussianCheckBtn = makeButton('3DGS check', () => runGaussianCheck());
+  const sdsPolishBtn = makeButton('SDS polish', () => runSdsPolish());
   const reportExportBtn = makeButton('Export report', () => runExportReport(), { className: 'full-btn' });
   const criticStreamEl = el('div', { class: 'words-stream critic-words' });
   criticStreamEl.hidden = true;
@@ -1123,6 +1125,7 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       el('div', { class: 'row' }, critiqueBtn.root, repairRunBtn.root),
       el('div', { class: 'divider' }),
       el('div', { class: 'row' }, consolidateBtn.root, uvRefineBtn.root),
+      el('div', { class: 'row' }, gaussianCheckBtn.root, sdsPolishBtn.root),
       reportExportBtn.root,
       criticFeedback.el,
     ),
@@ -1237,6 +1240,8 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
     critiqueBtn.setDisabled(!hasRun || isRunning);
     consolidateBtn.setDisabled(!hasRun || isRunning);
     uvRefineBtn.setDisabled(!hasRun || isRunning);
+    gaussianCheckBtn.setDisabled(!hasRun || isRunning);
+    sdsPolishBtn.setDisabled(!hasRun || isRunning);
     criticEmpty.hidden = hasRun;
   };
 
@@ -1630,6 +1635,45 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       criticFeedback.show(msg, 'ok');
       statusBanner.show(msg, 'ok');
       say(`uvRefine: ${(100 * r.unpaintedBefore).toFixed(1)}% → ${(100 * r.unpaintedAfter).toFixed(1)}%`);
+      if (savedAs) await session.saveRun(savedAs);
+    } catch (e) {
+      criticFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      syncRunAvailability();
+      syncPbr();
+    }
+  }
+
+  async function runGaussianCheck() {
+    if (!session.record) return;
+    gaussianCheckBtn.setDisabled(true);
+    criticFeedback.show('Fitting Surface Gaussian Appearance Field (SH degree 1)…', 'info');
+    try {
+      const r = session.gaussianField({ novelViews: 2 });
+      const outliers = r.outlierViews.length ? `outlier views [${r.outlierViews.join(', ')}]` : 'no outlier views';
+      const msg = `3DGS field (${r.gaussians} surfels, ${r.fitMs.toFixed(0)}ms): RMSE ${r.meanRmse.toFixed(1)}, ${outliers}, +${r.novelFilledViews} novel hole views.`;
+      criticFeedback.show(msg, 'ok');
+      statusBanner.show(msg, 'ok');
+      say(`gaussianField: ${r.gaussians} surfels, ${outliers}`);
+      if (savedAs && r.novelFilledViews > 0) await session.saveRun(savedAs);
+    } catch (e) {
+      criticFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      syncRunAvailability();
+      syncPbr();
+    }
+  }
+
+  async function runSdsPolish() {
+    if (!session.record) return;
+    sdsPolishBtn.setDisabled(true);
+    criticFeedback.show('Running importance-gated SDS hero polish…', 'info');
+    try {
+      const r = await session.sdsPolish();
+      const msg = `SDS polish (${r.steps} steps, ${r.seconds.toFixed(2)}s): updated ${r.activeTexels} hero texels, loss ${r.initialLoss.toFixed(1)} → ${r.finalLoss.toFixed(1)}.`;
+      criticFeedback.show(msg, 'ok');
+      statusBanner.show(msg, 'ok');
+      say(`sdsPolish: loss ${r.initialLoss.toFixed(1)} → ${r.finalLoss.toFixed(1)}`);
       if (savedAs) await session.saveRun(savedAs);
     } catch (e) {
       criticFeedback.show(String((e as Error)?.message ?? e), 'error');

@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import * as THREE from 'three';
-import { read as readKtx2 } from 'three/examples/jsm/libs/ktx-parse.module.js';
+import { KHR_SUPERCOMPRESSION_ZSTD, read as readKtx2 } from 'three/examples/jsm/libs/ktx-parse.module.js';
+import { ZSTDDecoder } from 'three/examples/jsm/libs/zstddec.module.js';
 import { describe, expect, it } from 'vitest';
-import { encodeUastcKtx2, rewriteGlbWithKtx2 } from '../src/core/ktx2';
+import { encodeUastcKtx2, rewriteGlbWithKtx2, zstdCompress } from '../src/core/ktx2';
 
 async function loadBasisTranscoder() {
   const jsCode = fs.readFileSync('node_modules/three/examples/jsm/libs/basis/basis_transcoder.js', 'utf8');
@@ -56,8 +58,20 @@ describe('Khronos KTX2 UASTC encoder & KHR_texture_basisu GLB export', () => {
     expect(parsed.pixelWidth).toBe(W);
     expect(parsed.pixelHeight).toBe(H);
     expect(parsed.levelCount).toBe(7); // 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1
-    // Level 0 GPU payload is 4x smaller than uncompressed RGBA8 (4096 bytes vs 16384 bytes)
-    expect(parsed.levels[0].levelData.byteLength).toBe((W * H * 4) / 4);
+    expect(parsed.supercompressionScheme).toBe(KHR_SUPERCOMPRESSION_ZSTD);
+    // Level 0 uncompressed GPU payload is 4x smaller than RGBA8 (4096 vs 16384), and Zstd shrinks disk bytes further!
+    expect(parsed.levels[0].uncompressedByteLength).toBe((W * H * 4) / 4);
+    expect(parsed.levels[0].levelData.byteLength).toBeLessThan(parsed.levels[0].uncompressedByteLength * 0.65);
+
+    // Verify ZSTDDecoder (used by Three.js KTX2Loader) and Node zlib.zstdDecompressSync both decode byte-for-byte
+    const zstd = new ZSTDDecoder();
+    await zstd.init();
+    const decodedByThree = zstd.decode(parsed.levels[0].levelData, parsed.levels[0].uncompressedByteLength);
+    expect(decodedByThree.byteLength).toBe(parsed.levels[0].uncompressedByteLength);
+    if (typeof zlib.zstdDecompressSync === 'function') {
+      const decodedByNode = new Uint8Array(zlib.zstdDecompressSync(parsed.levels[0].levelData));
+      expect(Buffer.compare(Buffer.from(decodedByThree), Buffer.from(decodedByNode))).toBe(0);
+    }
 
     const kf = new mod.KTX2File(ktx2);
     expect(kf.isValid()).toBeTruthy();
@@ -151,5 +165,56 @@ describe('Khronos KTX2 UASTC encoder & KHR_texture_basisu GLB export', () => {
     expect(rJson.images[0].mimeType).toBe('image/ktx2');
     expect(rJson.textures[0].extensions.KHR_texture_basisu).toEqual({ source: 0 });
     expect(rJson.textures[0].source).toBeUndefined();
+  });
+
+  it('compresses multi-block 512x512 guttered UASTC atlases >3x on disk via RFC 8878 Zstandard and handles RLE & incompressible fallback', async () => {
+    const zstd = new ZSTDDecoder();
+    await zstd.init();
+
+    // 1. Empty & pure RLE spans
+    expect(zstd.decode(zstdCompress(new Uint8Array(0)), 0).byteLength).toBe(0);
+    const rleSrc = new Uint8Array(200000).fill(0x5a);
+    const rleFrame = zstdCompress(rleSrc);
+    expect(rleFrame.byteLength).toBeLessThan(32);
+    expect(Buffer.compare(Buffer.from(zstd.decode(rleFrame, rleSrc.byteLength)), Buffer.from(rleSrc))).toBe(0);
+
+    // 2. High-entropy incompressible pseudo-random bytes -> falls back cleanly to Raw_Block
+    const rnd = new Uint8Array(16384);
+    let state = 0x12345678;
+    for (let i = 0; i < rnd.length; i++) {
+      state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+      rnd[i] = state & 0xff;
+    }
+    const rndFrame = zstdCompress(rnd);
+    expect(Buffer.compare(Buffer.from(zstd.decode(rndFrame, rnd.byteLength)), Buffer.from(rnd))).toBe(0);
+
+    // 3. Realistic 512x512 atlas (~35% UV gutters + brick/stone islands) -> 262,144B UASTC across 3 Zstd blocks
+    const S = 512;
+    const atlas = new Uint8ClampedArray(S * S * 4);
+    for (let y = 0; y < S; y++) {
+      for (let x = 0; x < S; x++) {
+        const i = 4 * (y * S + x);
+        const inGutter = (x % 128 < 22) || (y % 128 < 22);
+        if (inGutter) {
+          atlas.set([128, 128, 128, 255], i);
+        } else {
+          const mortar = (y % 16 === 0) || ((x + ((y >> 4) % 2) * 16) % 32 === 0);
+          const v = mortar ? 96 : 154 + ((x * 5 + y * 3) & 7);
+          atlas.set([v, v - 10, v - 18, 255], i);
+        }
+      }
+    }
+    const rawKtx2 = encodeUastcKtx2(atlas, S, S, { srgb: true, mipmaps: true, supercompress: false });
+    const zstdKtx2 = encodeUastcKtx2(atlas, S, S, { srgb: true, mipmaps: true, supercompress: true });
+    expect(zstdKtx2.byteLength).toBeLessThan(rawKtx2.byteLength / 3);
+
+    const mod = await loadBasisTranscoder();
+    const kf = new mod.KTX2File(zstdKtx2);
+    expect(kf.isValid()).toBeTruthy();
+    expect(kf.startTranscoding()).toBeTruthy();
+    const bc7 = new Uint8Array((S / 4) * (S / 4) * 16);
+    expect(kf.transcodeImage(bc7, 0, 0, 0, 6, 0, -1, -1)).toBe(1);
+    kf.close();
+    kf.delete();
   });
 });
