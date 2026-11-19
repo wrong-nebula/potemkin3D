@@ -3,15 +3,29 @@
 // streamed incrementally with @pierre/words, @pierre/highlights and Pele Mermaid.
 import wordsStyles from '@pierre/words/styles.css?inline';
 import { createDomRenderer } from '@pierre/words/html';
-import { createHighlightsPlugin } from '@pierre/words/highlights';
-import pierreDark from '@pierre/highlights/themes/pierre-dark';
 import { createMermaidPlugin } from '@pierre/words/mermaid';
 import { register, render } from 'pele/core';
 import flowchart from 'pele/diagrams/flowchart';
 
 register(flowchart);
 
-const codePlugin = createHighlightsPlugin({ theme: pierreDark });
+let cachedCodePlugin;
+let loadingHighlights = null;
+
+function ensureHighlights() {
+  if (cachedCodePlugin) return Promise.resolve(cachedCodePlugin);
+  if (!loadingHighlights) {
+    loadingHighlights = Promise.all([
+      import('@pierre/words/highlights'),
+      import('@pierre/highlights/themes/pierre-dark'),
+    ]).then(([hlMod, themeMod]) => {
+      cachedCodePlugin = hlMod.createHighlightsPlugin({ theme: themeMod.default });
+      return cachedCodePlugin;
+    });
+  }
+  return loadingHighlights;
+}
+
 const mermaidPlugin = createMermaidPlugin({ render }, { responsive: true, padding: 8, maxWidth: 360 });
 
 const NOTES_CSS = `
@@ -30,34 +44,12 @@ ${wordsStyles}
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   color: #f2f2f2;
 }
-.potemkin-notes-btn {
-  position: fixed;
-  right: max(16px, env(safe-area-inset-right));
-  bottom: max(16px, env(safe-area-inset-bottom));
-  z-index: 25;
-  min-height: 34px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: rgba(20, 20, 20, 0.84);
-  color: #f2f2f2;
-  font: 500 12px/1.2 ui-sans-serif, system-ui, sans-serif;
-  cursor: pointer;
-}
-.potemkin-notes-btn:hover {
-  background: #242424;
-  border-color: rgba(255, 255, 255, 0.38);
-}
-.potemkin-notes-btn:focus-visible {
-  outline: 2px solid #e5e5e5;
-  outline-offset: 2px;
-}
 .potemkin-notes-drawer {
   position: fixed;
   top: calc(max(56px, env(safe-area-inset-top) + 48px));
-  right: max(16px, env(safe-area-inset-right));
-  bottom: calc(max(60px, env(safe-area-inset-bottom) + 52px));
-  width: min(380px, calc(100vw - 32px));
+  right: max(18px, env(safe-area-inset-right));
+  bottom: calc(max(72px, env(safe-area-inset-bottom) + 64px));
+  width: min(380px, calc(100vw - 36px));
   z-index: 26;
   display: flex;
   flex-direction: column;
@@ -80,17 +72,18 @@ ${wordsStyles}
 }
 .potemkin-notes-tabs {
   display: inline-flex;
-  gap: 4px;
+  gap: 8px;
 }
 .potemkin-notes-tab,
 .potemkin-notes-close {
-  min-height: 26px;
-  padding: 3px 9px;
+  min-height: 32px;
+  min-width: 44px;
+  padding: 5px 11px;
   border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
-  color: #a3a3a3;
-  font: 500 11.5px/1.2 ui-sans-serif, system-ui, sans-serif;
+  color: #b8b8b8;
+  font: 500 12px/1.2 ui-sans-serif, system-ui, sans-serif;
   cursor: pointer;
 }
 .potemkin-notes-tab[aria-selected="true"] {
@@ -181,19 +174,10 @@ ${wordsStyles}
 }
 `;
 
-export function mountWalkNotes({ sceneKind, getSnapshot }) {
+export function attachWalkNotesDrawer({ sceneKind, getSnapshot, root, btn }) {
   const styleEl = document.createElement('style');
   styleEl.textContent = NOTES_CSS;
   document.head.append(styleEl);
-
-  const root = document.createElement('div');
-  root.className = 'potemkin-notes-ui';
-
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'potemkin-notes-btn';
-  btn.setAttribute('aria-expanded', 'false');
-  btn.textContent = 'Notes · I';
 
   const drawer = document.createElement('aside');
   drawer.className = 'potemkin-notes-drawer';
@@ -201,6 +185,7 @@ export function mountWalkNotes({ sceneKind, getSnapshot }) {
   drawer.hidden = true;
 
   const tabContext = document.createElement('button');
+  tabContext.id = 'pk-notes-tab-context';
   tabContext.type = 'button';
   tabContext.className = 'potemkin-notes-tab';
   tabContext.setAttribute('role', 'tab');
@@ -208,6 +193,7 @@ export function mountWalkNotes({ sceneKind, getSnapshot }) {
   tabContext.textContent = 'Field Notes';
 
   const tabProv = document.createElement('button');
+  tabProv.id = 'pk-notes-tab-prov';
   tabProv.type = 'button';
   tabProv.className = 'potemkin-notes-tab';
   tabProv.setAttribute('role', 'tab');
@@ -225,17 +211,19 @@ export function mountWalkNotes({ sceneKind, getSnapshot }) {
   const tabsWrap = document.createElement('div');
   tabsWrap.className = 'potemkin-notes-tabs';
   tabsWrap.setAttribute('role', 'tablist');
+  tabsWrap.setAttribute('aria-label', 'Notes sections');
   tabsWrap.append(tabContext, tabProv);
   head.append(tabsWrap, closeBtn);
 
   const body = document.createElement('div');
   body.className = 'potemkin-notes-body';
+  body.setAttribute('role', 'tabpanel');
+  body.setAttribute('aria-labelledby', 'pk-notes-tab-context');
   body.setAttribute('data-markdown', 'root');
   drawer.append(head, body);
-  root.append(btn, drawer);
-  document.body.append(root);
+  root.append(drawer);
 
-  const dom = createDomRenderer(body, {
+  const buildOpts = (code) => ({
     math: true,
     cjk: true,
     controls: false,
@@ -245,32 +233,41 @@ export function mountWalkNotes({ sceneKind, getSnapshot }) {
       a: (html) => html.replace('<a ', '<a target="_blank" rel="noopener noreferrer" '),
     },
     plugins: {
-      code: codePlugin,
+      ...(code ? { code } : {}),
       mermaid: mermaidPlugin,
     },
   });
+  const dom = createDomRenderer(body, buildOpts(cachedCodePlugin));
   dom.connect();
 
   let activeTab = 'context';
   let lastKey = '';
+  let latestMd = '';
   let streamRaf = 0;
 
   const streamMarkdown = (md) => {
     if (streamRaf) cancelAnimationFrame(streamRaf);
+    latestMd = md;
+    if (!cachedCodePlugin && activeTab === 'provenance') {
+      void ensureHighlights().then((code) => {
+        dom.configure(buildOpts(code));
+        if (!streamRaf && latestMd) dom.update(latestMd, false, false, false);
+      });
+    }
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduced || md.length <= 240) {
+    if (reduced || md.length <= 400) {
       dom.update(md, false, false, false);
       return;
     }
     let cursor = 0;
     const step = () => {
-      cursor = Math.min(md.length, cursor + 260);
+      cursor = Math.min(md.length, cursor + 900);
       const done = cursor >= md.length;
       dom.update(md.slice(0, cursor), !done, !done, !done ? { animation: 'fadeIn', duration: 140 } : false, !done ? 'block' : undefined);
       if (!done) streamRaf = requestAnimationFrame(step);
       else streamRaf = 0;
     };
-    streamRaf = requestAnimationFrame(step);
+    step();
   };
 
   const buildContextMd = (snap) => {
@@ -430,32 +427,20 @@ export function mountWalkNotes({ sceneKind, getSnapshot }) {
     }
   };
 
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    setOpen(drawer.hidden);
-  });
   closeBtn.addEventListener('click', () => setOpen(false));
   tabContext.addEventListener('click', () => {
     activeTab = 'context';
     tabContext.setAttribute('aria-selected', 'true');
     tabProv.setAttribute('aria-selected', 'false');
+    body.setAttribute('aria-labelledby', 'pk-notes-tab-context');
     renderNow(true);
   });
   tabProv.addEventListener('click', () => {
     activeTab = 'provenance';
     tabContext.setAttribute('aria-selected', 'false');
     tabProv.setAttribute('aria-selected', 'true');
+    body.setAttribute('aria-labelledby', 'pk-notes-tab-prov');
     renderNow(true);
-  });
-
-  window.addEventListener('keydown', (e) => {
-    if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-    const k = e.key.toLowerCase();
-    if (k === 'i' || e.key === '?') {
-      setOpen(drawer.hidden);
-    } else if (k === 'escape' && !drawer.hidden && !document.pointerLockElement) {
-      setOpen(false);
-    }
   });
 
   return {
@@ -463,5 +448,8 @@ export function mountWalkNotes({ sceneKind, getSnapshot }) {
       if (!drawer.hidden) renderNow(false);
     },
     setOpen,
+    toggle() {
+      setOpen(drawer.hidden);
+    },
   };
 }

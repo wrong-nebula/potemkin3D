@@ -18,8 +18,27 @@ if (!shell) throw new Error('The shipped site is missing its shared scene menu')
 await fs.rm(out, { recursive: true, force: true });
 await fs.cp(source, out, { recursive: true });
 await fs.rm(path.join(out, 'assets'), { recursive: true, force: true });
-await build({ configFile: false, root, base: './', publicDir: false,
-  build: { outDir: out, emptyOutDir: false, rollupOptions: { input: path.join(root, 'loft-walk.html') } } });
+await build({
+  configFile: false,
+  root,
+  base: './',
+  publicDir: false,
+  build: {
+    outDir: out,
+    emptyOutDir: false,
+    chunkSizeWarningLimit: 800,
+    rolldownOptions: {
+      input: path.join(root, 'loft-walk.html'),
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'three', test: /node_modules[\\/](three|three-mesh-bvh)/, priority: 20 },
+          ],
+        },
+      },
+    },
+  },
+});
 let loft = await fs.readFile(path.join(out, 'loft-walk.html'), 'utf8');
 loft = loft.replace(/<html lang="en"[^>]*>/, '<html lang="en" data-run="scene" data-base="./runs/">');
 loft = loft.replace('</head>', `${shell}\n</head>`);

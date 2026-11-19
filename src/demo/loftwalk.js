@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
-import { mountWalkNotes } from './walk-notes.js';
+import { mountWalkNotesShell } from './walk-notes-shell.js';
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
@@ -1003,7 +1003,7 @@ async function start() {
   resize();
   msg.remove();
   hud.hidden = false;
-  const walkNotes = mountWalkNotes({
+  const walkNotes = mountWalkNotesShell({
     sceneKind: 'loft',
     getSnapshot: () => ({ pos: position, on: { ...on }, meta, hasMaps, focus: state.focus, runId: RUN }),
   });

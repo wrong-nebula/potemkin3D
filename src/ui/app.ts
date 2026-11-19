@@ -1933,7 +1933,7 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   async function runExportReport() {
     const lvlName = session.level?.name ?? 'scene';
     const md = buildLiveReportMarkdown();
-    const html = renderStandaloneStudioReport({
+    const html = await renderStandaloneStudioReport({
       title: `${lvlName} Report`,
       subtitle: savedAs ? `Run ${savedAs}` : `${lvlName} Studio Session`,
       markdown: md,

@@ -188,6 +188,20 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [falProxy()],
     server: { port: 5178, strictPort: false },
-    build: { target: 'es2022', chunkSizeWarningLimit: 2000 },
+    build: {
+      target: 'es2022',
+      chunkSizeWarningLimit: 750,
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              { name: 'three', test: /node_modules[\\/](three|three-mesh-bvh)/, priority: 30 },
+              { name: 'ui-sdk', test: /node_modules[\\/]@ui-sdk/, priority: 25 },
+              { name: 'words-core', test: /node_modules[\\/]@pierre[\\/]words[\\/]dist[\\/](index|html|mermaid|wasm)/, priority: 20 },
+            ],
+          },
+        },
+      },
+    },
   };
 });

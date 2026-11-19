@@ -14,7 +14,11 @@ const lockFile = (root=ROOT) => inside(root,'.potemkin/active.json',{exists:fals
 const alive = pid => { try { process.kill(pid,0); return true; } catch(e) { return e.code!=='ESRCH'; } };
 export function releaseLock(id,root=ROOT) {
   const file=lockFile(root);
-  if (fs.existsSync(file) && readJSON(file).id===id) fs.unlinkSync(file);
+  try {
+    if (fs.existsSync(file) && readJSON(file).id===id) fs.unlinkSync(file);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
 }
 export function getJob(id, { cursor=0, limit=25, root=ROOT } = {}) {
   const dir=jobDir(id,root), file=path.join(dir,'state.json');

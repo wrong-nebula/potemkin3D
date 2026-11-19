@@ -19,7 +19,26 @@ run(process.execPath, [path.join(here, 'take-film.mjs')]);
 run(process.execPath, [path.join(here, 'make-lut.mjs')]);
 // the page and its script; the level files already in the folder are left where they are
 for (const f of fs.existsSync(out) ? fs.readdirSync(out) : []) if (f === 'assets' || f === 'index.html') fs.rmSync(path.join(out, f), { recursive: true });
-await build({ configFile: false, root: here, base: './', logLevel: 'error', build: { outDir: out, emptyOutDir: false } });
+await build({
+  configFile: false,
+  root: here,
+  base: './',
+  logLevel: 'error',
+  build: {
+    outDir: out,
+    emptyOutDir: false,
+    chunkSizeWarningLimit: 800,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'three', test: /node_modules[\\/](three|three-mesh-bvh)/, priority: 20 },
+          ],
+        },
+      },
+    },
+  },
+});
 const python = process.env.PYTHON ?? 'python3';
 if (a.fresh || !fs.existsSync(path.join(out, 'level_2k.glb')) || !fs.existsSync(path.join(out, 'hi', 'textures.json'))) {
   if (!a.run) { console.error('--run <id> is needed to make the level files'); process.exit(1); }

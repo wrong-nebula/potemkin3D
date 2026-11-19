@@ -20,7 +20,7 @@ import { makePomAtlas, pomLayer, pomUniforms } from './pom.js';
 import { TextureLod } from './lod.js';
 import { DUST_FRAG, RAYS_FRAG, makeMotes, noise, sandLayer, sandUniforms } from './sand.js';
 import { BLUR_FRAG, DOF_FRAG, DOWN_FRAG, FINAL_FRAG, FLARE_BLUR, FLARE_FEATURES, FLARE_STREAK, FLARE_THRESHOLD, LUM_FRAG, UP_FRAG, makeDirtTexture, mat } from './film.js';
-import { mountWalkNotes } from '../../src/demo/walk-notes.js';
+import { mountWalkNotesShell } from '../../src/demo/walk-notes-shell.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
@@ -507,7 +507,7 @@ new GLTFLoader().load('./level_2k.glb', (gltf) => {
   placeSun();
   msg.remove();
   hud.hidden = false;
-  walkNotes = mountWalkNotes({
+  walkNotes = mountWalkNotesShell({
     sceneKind: 'luxor',
     getSnapshot: () => ({
       pos: camera.position,

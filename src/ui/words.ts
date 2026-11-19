@@ -1,20 +1,35 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import '@pierre/words/styles.css';
-import { createDomRenderer, createHtmlRenderer, escapeHtml } from '@pierre/words/html';
-import { createHighlightsPlugin } from '@pierre/words/highlights';
-import pierreDark from '@pierre/highlights/themes/pierre-dark';
+import { createDomRenderer, createHtmlRenderer, escapeHtml, type CodeHighlighterPlugin } from '@pierre/words/html';
 import { createMermaidPlugin } from '@pierre/words/mermaid';
 import { register, render } from 'pele/core';
 import flowchart from 'pele/diagrams/flowchart';
-import pie from 'pele/diagrams/pie';
-import sequence from 'pele/diagrams/sequence';
-import state from 'pele/diagrams/state';
-import xychart from 'pele/diagrams/xychart';
 import type { CritiqueReport } from '../core/critic';
 
-register(flowchart, sequence, state, pie, xychart);
+register(flowchart);
 
-const codePlugin = createHighlightsPlugin({ theme: pierreDark });
+let cachedCodePlugin: CodeHighlighterPlugin | undefined;
+let loadingRich: Promise<CodeHighlighterPlugin> | null = null;
+
+export function ensureCodeHighlights(): Promise<CodeHighlighterPlugin> {
+  if (cachedCodePlugin) return Promise.resolve(cachedCodePlugin);
+  if (!loadingRich) {
+    loadingRich = Promise.all([
+      import('@pierre/words/highlights'),
+      import('@pierre/highlights/themes/pierre-dark'),
+      import('pele/diagrams/pie'),
+      import('pele/diagrams/sequence'),
+      import('pele/diagrams/state'),
+      import('pele/diagrams/xychart'),
+    ]).then(([hlMod, themeMod, pieMod, seqMod, stateMod, xyMod]) => {
+      register(pieMod.default, seqMod.default, stateMod.default, xyMod.default);
+      cachedCodePlugin = hlMod.createHighlightsPlugin({ theme: themeMod.default });
+      return cachedCodePlugin;
+    });
+  }
+  return loadingRich;
+}
+
 const mermaidPlugin = createMermaidPlugin(
   { render },
   { responsive: true, padding: 10, maxWidth: 680 },
@@ -32,7 +47,7 @@ export interface WordsMountOptions {
 
 export function mountWordsView(root: HTMLElement, opts: WordsMountOptions = {}) {
   root.setAttribute('data-markdown', 'root');
-  const dom = createDomRenderer(root, {
+  const buildOpts = (code?: CodeHighlighterPlugin) => ({
     math: true,
     cjk: true,
     controls: opts.controls ?? false,
@@ -40,14 +55,27 @@ export function mountWordsView(root: HTMLElement, opts: WordsMountOptions = {}) 
     idPrefix: opts.idPrefix ?? 'pk-ui-',
     components: sharedComponents,
     plugins: {
-      code: codePlugin,
+      ...(code ? { code } : {}),
       mermaid: mermaidPlugin,
     },
   });
+  const dom = createDomRenderer(root, buildOpts(cachedCodePlugin));
   dom.connect();
 
+  let disposed = false;
   let streamRaf = 0;
   let latestMarkdown = '';
+
+  const maybeUpgradeCodeHighlighter = (source: string) => {
+    if (cachedCodePlugin || (!opts.controls && !source.includes('```'))) return;
+    void ensureCodeHighlights().then((code) => {
+      if (disposed) return;
+      dom.configure(buildOpts(code));
+      if (!streamRaf && latestMarkdown) {
+        dom.update(latestMarkdown, false, false, false);
+      }
+    });
+  };
 
   const cancelStream = () => {
     if (streamRaf) {
@@ -63,6 +91,7 @@ export function mountWordsView(root: HTMLElement, opts: WordsMountOptions = {}) 
     update(source: string, { streaming = false, animated = false }: { streaming?: boolean; animated?: boolean } = {}) {
       cancelStream();
       latestMarkdown = source;
+      maybeUpgradeCodeHighlighter(source);
       const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       dom.update(
         source,
@@ -75,6 +104,7 @@ export function mountWordsView(root: HTMLElement, opts: WordsMountOptions = {}) 
     stream(source: string, { charsPerFrame = 1800 }: { charsPerFrame?: number } = {}) {
       cancelStream();
       latestMarkdown = source;
+      maybeUpgradeCodeHighlighter(source);
       const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (reduced || source.length <= charsPerFrame) {
         dom.update(source, false, false, false);
@@ -97,13 +127,14 @@ export function mountWordsView(root: HTMLElement, opts: WordsMountOptions = {}) 
       step();
     },
     dispose() {
+      disposed = true;
       cancelStream();
       dom.disconnect();
     },
   };
 }
 
-export function renderStandaloneStudioReport({
+export async function renderStandaloneStudioReport({
   title,
   subtitle,
   markdown,
@@ -111,7 +142,8 @@ export function renderStandaloneStudioReport({
   title: string;
   subtitle: string;
   markdown: string;
-}): string {
+}): Promise<string> {
+  const codePlugin = await ensureCodeHighlights();
   const formatter = createHtmlRenderer({
     math: true,
     cjk: true,
