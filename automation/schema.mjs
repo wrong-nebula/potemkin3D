@@ -48,6 +48,7 @@ export const pipelineOptions = object(optional({
   mostlyNew: fraction, feather: number.min(0).max(256), seed: z.number().int(), plan: planOptions,
   check: z.boolean(), checkThreshold: fraction, checkRetries: count, retryAbove: fraction, minFresh: fraction,
   checkPlanes: z.boolean(), checkCells: z.boolean(), styleReference: z.boolean(), nameParts: z.boolean(),
+  wearConditioning: z.boolean(),
   provider: providerKind, providerFallback, localBackend, localUrl, localModel: text, localTail: z.boolean(),
 }));
 const weightOverlay = z.enum(['off','openness','curvature','light','class','importance','paths']);

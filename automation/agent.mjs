@@ -142,6 +142,7 @@ export function buildExternalMcpHooks(session) {
     blenderMcp: {
       server: 'blender-mcp',
       tool: 'import_gltf_asset',
+      syncCommand: `potemkin dcc-sync --session-id ${session.id} --target blender`,
       arguments: {
         filepath: glb,
         collection: `Potemkin_${session.runId}`,
@@ -158,6 +159,7 @@ export function buildExternalMcpHooks(session) {
     unrealMcp: {
       server: 'unreal-mcp',
       tool: 'import_static_mesh_pbr',
+      syncCommand: `potemkin dcc-sync --session-id ${session.id} --target unreal`,
       arguments: {
         sourceGlb: glb,
         destinationPath: `/Game/Potemkin/${session.runId}`,

@@ -62,6 +62,10 @@ export interface LevelUnwrap {
   charts: number;
   /** Share of the texture the charts fill. */
   fill: number;
+  /** Artist-authored UV charts whose seams were preserved intact during partial unwrap. */
+  preservedCharts?: number;
+  /** Share of total world surface area whose authored UV seams were preserved (0 to 1). */
+  preservedSurface?: number;
   /** Fingerprint of the texture coordinates it made. */
   hash: string;
   seconds: number;

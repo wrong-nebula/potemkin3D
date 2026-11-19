@@ -13,6 +13,7 @@ import {
   agentCritique, agentCritiqueInput,
   agentStatus, readAgentMemory,
 } from './agent.mjs';
+import { dccSync, dccSyncInput } from './dcc.mjs';
 import {
   listDocs,
   readDoc,
@@ -90,6 +91,7 @@ export const commands={
   'agent-critique':command('Run the standalone Critic on a saved run (no model calls): coverage, high-rank px/m, cross-view seam ratio, SAM/MoGe residuals, diagnostic screenshots and repair prescriptions.',agentCritiqueInput,input=>agentCritique(input),false),
   'agent-status':command('Inspect a budgeted Planner → Actor → Critic session, pending spend proposal, episodic trace and Blender/Unreal MCP hooks.',object({sessionId:jobId}),input=>agentStatus(input)),
   'agent-memory':command('Read cross-session memory of successful material presets, layouts and repair pattern score gains.',empty,()=>readAgentMemory()),
+  'dcc-sync':command('Sync an exported PBR GLB and detached ORM/Normal/Height maps from a sessionId, runId or glb path directly into a running blender-mcp or unreal-mcp server (or stage scripts/payloads with dryRun=true).',dccSyncInput,input=>dccSync(input),false),
   docs:command('List available Potemkin documentation topics powered by @pierre/words.',empty,()=>({docs:listDocs()})),
   doc:command('Render a Potemkin documentation topic (engine, readme, potemkin, material-maps, automation, tutorial, provenance, todo) as Markdown, HTML, standalone HTML or ANSI.',
     object({topic:z.string().default('engine'),format:z.enum(['markdown','html','standalone-html','ansi']).default('markdown'),width:z.number().int().min(40).max(200).default(88)}),

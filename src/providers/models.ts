@@ -127,6 +127,8 @@ export interface PromptContext {
   shapes?: boolean;
   /** Discrete standalone object mode (prop, weapon, character, vehicle) rather than an architectural room or street. */
   object?: boolean;
+  /** Geometry-derived cavity grime & exposed-ridge wear cues present in the view's unpainted surfaces. */
+  wear?: { cavity?: boolean; ridge?: boolean };
 }
 
 /**
@@ -312,6 +314,22 @@ const painted = (c: PromptContext) => (isPainted(c.wording)
   ? ' It is painted by hand: flat, matte colour with soft, brushed variation and a few thin ink lines, with no photographic texture and no grain.'
   : '');
 
+/** Geometry-derived cavity grime & ridge-wear grounding, omitted on diffuse/albedo passes and cel animation. */
+function wearClause(c: PromptContext): string {
+  if (!c.wear || c.diffuse || isPainted(c.wording) || c.mode === 'floor' || c.mode === 'roof') return '';
+  const { cavity, ridge } = c.wear;
+  if (cavity && ridge) {
+    return ' Natural surface wear follows the geometry: subtle accumulated dirt and dampness in recessed corners and along wall bases, and light wear along exposed edges and ridges.';
+  }
+  if (cavity) {
+    return ' Natural surface wear follows the geometry: subtle accumulated dirt and dampness in recessed corners and along wall bases.';
+  }
+  if (ridge) {
+    return ' Natural surface wear follows the geometry: subtle wear and patina along exposed edges and ridges.';
+  }
+  return '';
+}
+
 /** What a view that carries notes is told about them: the wording that worked on MiniMax H3 (three notes of three carried out, no red left). */
 const NOTES = ' The first image carries a few notes in red: handwriting on white labels, with red outlines, lines and arrows. They are an ' +
   "art director's instructions and not part of the scene. Carry out each note exactly at the place it marks, at the size its outline " +
@@ -385,24 +403,24 @@ export const prompts = {
     if (c.mode === 'first') {
       return `Turn this untextured gray 3D render into a photorealistic photo of ${c.look}. Every gray shape keeps ` +
         `its exact outline and becomes the real surface it is${shapes(c)}. Keep exactly the same camera, ` +
-        `perspective and edges, with ${light(c)}, and give the surfaces realistic materials. ${surfaces(c)}`;
+        `perspective and edges, with ${light(c)}, and give the surfaces realistic materials. ${surfaces(c)}${wearClause(c)}`;
     }
     if (c.shapes) {
       return `Paint the masked gray shapes with photorealistic materials of ${c.look}. Each masked shape is a solid part ` +
         'of the scene with exactly this outline, standing apart from what is behind and beside it: give it a surface of ' +
         'its own, with a visible edge where it meets its surroundings, and do not continue the wall or the ground across ' +
         `it. Keep every edge and the perspective exactly as they are, with ${light(c)}.` +
-        `${c.parts ? ` The masked area shows: ${c.parts}.` : ''} ${surfaces(c)}`;
+        `${c.parts ? ` The masked area shows: ${c.parts}.` : ''} ${surfaces(c)}${wearClause(c)}`;
     }
     if (c.plain) {
       return `Paint the masked gray surfaces with photorealistic materials of ${bareLook(c.look)}, as more of the surfaces that ` +
         `border them, each in its own bare material (the same ${bare(c)}), ${unbroken(c)}` +
         `. Keep every edge and the perspective exactly as they are, with ${light(c)}.` +
-        `${c.parts ? ` The masked area shows: ${c.parts}.` : ''}`;
+        `${c.parts ? ` The masked area shows: ${c.parts}.` : ''}${wearClause(c)}`;
     }
     return `Paint the masked gray surfaces with photorealistic materials of ${c.look}, continuing the textured ` +
       `surfaces around them seamlessly. Keep every edge and the perspective exactly as they are, with ${light(c)}.` +
-      `${c.parts ? ` The masked area shows: ${c.parts}.` : ''} ${surfaces(c)}`;
+      `${c.parts ? ` The masked area shows: ${c.parts}.` : ''} ${surfaces(c)}${wearClause(c)}`;
   },
   /** Caption-style (FLUX 3 Klein, which edits without a mask and is told what the result looks like). */
   caption(c: PromptContext): string {
@@ -410,7 +428,7 @@ export const prompts = {
     if ((c.wording === 'transfer' || c.wording === 'production') && (c.mode === 'first' || c.mode === 'fill')) {
       return filmCaption(c) + (c.mode === 'fill' ? references(c) : '') + (c.notes ? NOTES : '');
     }
-    return prompts.captionBody(c) + site(c) + (c.mode === 'fill' ? references(c) : '') + (c.notes && c.mode !== 'floor' && c.mode !== 'roof' ? NOTES : '');
+    return prompts.captionBody(c) + wearClause(c) + site(c) + (c.mode === 'fill' ? references(c) : '') + (c.notes && c.mode !== 'floor' && c.mode !== 'roof' ? NOTES : '');
   },
   captionBody(c: PromptContext): string {
     if (c.mode === 'floor' && c.variant !== undefined) {

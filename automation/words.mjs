@@ -541,6 +541,35 @@ export function formatCommandMarkdown(command, data) {
 
   if (command === 'job-status') return formatJobMarkdown(data);
 
+  if (command === 'dcc-sync' && Array.isArray(data.targets)) {
+    const mapList = Object.entries(data.maps ?? {}).map(([k, p]) => `- **${k}**: \`${p}\``).join('\n') || '- _(embedded GLB base-color only)_';
+    const targetRows = data.targets.map((t) => `| \`${t.server}\` | **${t.status.toUpperCase()}** | \`${t.tool}\` | ${t.endpoint ? `\`${t.endpoint}\`` : 'offline preview'} |`);
+    return [
+      `# DCC Sync${data.dryRun ? ' (Dry Run)' : ''}`,
+      '',
+      `- **Mesh**: \`${data.glb}\``,
+      `- **Blender collection**: \`${data.collection}\``,
+      `- **Unreal path**: \`${data.destinationPath}\``,
+      '',
+      '```mermaid',
+      'flowchart LR',
+      `  GLB["${data.glb}"] --> SYNC["potemkin dcc-sync"]`,
+      ...data.targets.map((t, idx) => `  SYNC --> T${idx}["${t.server}: ${t.tool}"]`),
+      '```',
+      '',
+      '## Channels',
+      '',
+      mapList,
+      '',
+      '## Target Dispatch',
+      '',
+      '| Server | Status | Negotiated Tool | Endpoint |',
+      '| :--- | :--- | :--- | :--- |',
+      ...targetRows,
+      '',
+    ].join('\n');
+  }
+
   if (command === 'jobs' && Array.isArray(data.jobs)) {
     const rows = data.jobs.slice(0, 20).map((j) => `| \`${j.id}\` | \`${j.kind}\` | **${j.status}** | ${j.step ?? 0}/${j.total ?? 1} | \`${j.createdAt}\` |`);
     return ['# Recent Jobs', '', '| Job ID | Kind | Status | Steps | Created |', '| :--- | :--- | :--- | ---: | :--- |', ...rows, ''].join('\n');

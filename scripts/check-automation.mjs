@@ -43,7 +43,8 @@ try {
   assert(listed.tools.some(t=>t.name==='potemkin_agent_plan'));
   assert(listed.tools.some(t=>t.name==='potemkin_report'));
   assert(listed.tools.some(t=>t.name==='potemkin_doc'));
-  assert.equal(listed.tools.length,23);
+  assert(listed.tools.some(t=>t.name==='potemkin_dcc_sync'));
+  assert.equal(listed.tools.length,24);
   assert((await call('catalog')).samples.some(s=>s.name==='luxor'));
   assert((await call('docs')).docs.some(d=>d.id==='engine'));
   assert((await client.readResource({uri:'potemkin://docs/engine'})).contents[0].text.includes('Potemkin'));
@@ -131,6 +132,9 @@ try {
   assert((round2.exportArtifacts??[]).some(a=>a.name===`${agentRunId}.glb`),`exportArtifacts=${JSON.stringify(round2.exportArtifacts)}`);
   assert.equal(round2.externalHooks.blenderMcp.server,'blender-mcp');
   assert.equal(round2.externalHooks.unrealMcp.server,'unreal-mcp');
+  const dccDry=await call('dcc_sync',{sessionId:agentSessionId,glb:`output/automation/${round2.jobId}/${agentRunId}.glb`,target:'both',dryRun:true});
+  assert.equal(dccDry.targets.length,2);
+  assert(dccDry.targets[0].script.includes('bpy.ops.import_scene.gltf'));
   assert(fs.existsSync(path.join(agentRunDir,'episodes.ndjson')),'missing episodes.ndjson');
   assert(fs.existsSync(path.join(agentRunDir,'look.plan.json')),'missing look.plan.json');
   assert(fs.existsSync(path.join(agentRunDir,'report.html')),'missing runs/<id>/report.html');

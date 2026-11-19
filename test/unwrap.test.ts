@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { uvIslands } from '../src/core/layout';
 import { loadLevel } from '../src/core/scene';
-import { atlasMeshes, unwrap, uvHealth, type XatlasRunner } from '../src/core/unwrap';
+import { atlasMeshes, partitionUvCharts, unwrap, uvHealth, type XatlasRunner } from '../src/core/unwrap';
 import { nodeXatlas } from './xatlas-node';
 
 /** Triangles of some boxes and a floor (non-indexed, world space), each a part of its own, with three.js's UVs. */
@@ -131,6 +131,94 @@ describe('unwrap (xatlas)', () => {
     const { position, label } = blockout();
     const [a, b] = await Promise.all([unwrap(position, label, run), unwrap(position, label, run)]);
     expect(b.uv).toEqual(a.uv);
+  });
+
+  it('pins valid hand-authored UV seams/charts and runs xatlas only on missing, tiling or stacked parts', async () => {
+    // Part 0: curved L-panel with intentional hand-authored seam splitting panel A (2 tris) from panel B (2 tris)
+    // Panel A: 2m x 2m in XY at [0.05..0.45, 0.05..0.45]; Panel B: 2m x 2m in YZ meeting at x=2, split across a deliberate UV seam at u=0.55..0.95
+    const authoredPos = Float32Array.from([
+      // Panel A (2 tris, welded diagonal)
+      0, 0, 0,  2, 0, 0,  2, 2, 0,
+      0, 0, 0,  2, 2, 0,  0, 2, 0,
+      // Panel B (2 tris, 90° corner at x=2, intentionally cut along x=2 seam by artist)
+      2, 0, 0,  2, 0, 2,  2, 2, 2,
+      2, 0, 0,  2, 2, 2,  2, 2, 0,
+    ]);
+    const authoredUv = Float32Array.from([
+      0.05, 0.05,  0.45, 0.05,  0.45, 0.45,
+      0.05, 0.05,  0.45, 0.45,  0.05, 0.45,
+      0.55, 0.05,  0.95, 0.05,  0.95, 0.45,
+      0.55, 0.05,  0.95, 0.45,  0.55, 0.45,
+    ]);
+    const gAuthored = new THREE.BufferGeometry();
+    gAuthored.setAttribute('position', new THREE.BufferAttribute(authoredPos, 3));
+    gAuthored.setAttribute('uv', new THREE.BufferAttribute(authoredUv, 2));
+    gAuthored.setAttribute('label', new THREE.Float32BufferAttribute(new Float32Array(12).fill(0), 1));
+    gAuthored.computeVertexNormals();
+
+    // Part 1: missing UVs (all 0)
+    const gMissing = new THREE.BoxGeometry(2, 2, 2).translate(-4, 1, 0).toNonIndexed();
+    gMissing.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(gMissing.getAttribute('position').count * 2), 2));
+    gMissing.setAttribute('label', new THREE.Float32BufferAttribute(new Float32Array(gMissing.getAttribute('position').count).fill(1), 1));
+
+    // Part 2: tiling UVs (0..4 outside square)
+    const gTiling = new THREE.PlaneGeometry(4, 4, 2, 2).rotateX(-Math.PI / 2).translate(0, 0, 5).toNonIndexed();
+    const tUv = gTiling.getAttribute('uv').array as Float32Array;
+    for (let i = 0; i < tUv.length; i++) tUv[i] *= 4;
+    gTiling.setAttribute('label', new THREE.Float32BufferAttribute(new Float32Array(gTiling.getAttribute('position').count).fill(2), 1));
+
+    // Part 3: stretched/stacked primitive box
+    const gStacked = new THREE.BoxGeometry(4, 1, 1).translate(5, 0.5, 0).toNonIndexed();
+    gStacked.setAttribute('label', new THREE.Float32BufferAttribute(new Float32Array(gStacked.getAttribute('position').count).fill(3), 1));
+
+    const merged = mergeGeometries([gAuthored, gMissing, gTiling, gStacked])!;
+    const position = merged.getAttribute('position').array as Float32Array;
+    const uv = merged.getAttribute('uv').array as Float32Array;
+    const label = merged.getAttribute('label').array as Float32Array;
+
+    expect(uvHealth(position, uv, 256).problem).toBeDefined();
+
+    const part = partitionUvCharts(position, uv, label);
+    expect(part.preservedCharts).toBe(2); // Both artist charts on Part 0 pinned!
+    expect(part.pinnedTriangle.slice(0, 4)).toEqual(new Uint8Array([1, 1, 1, 1]));
+    expect(part.pinnedTriangle.slice(4).every((v) => v === 0)).toBe(true);
+
+    const u = await unwrap(position, label, run, { uv, preserveSeams: true });
+    expect(u.preservedCharts).toBe(2);
+    expect(u.meshes).toBe(3); // Only Parts 1, 2, 3 went through xatlas!
+    const h = uvHealth(position, u.uv, 512);
+    expect(h.problem).toBeUndefined();
+    expect(h.overlap).toBe(0);
+
+    // Verify Part 0's hand-authored interior diagonal stays welded AND the deliberate seam between tri 0..1 and tri 2..3 stays split
+    const authoredIslandsAfter = uvIslands(position.slice(0, 36), u.uv.slice(0, 24));
+    expect(authoredIslandsAfter.count).toBe(2);
+    expect(authoredIslandsAfter.of[0]).toBe(authoredIslandsAfter.of[1]);
+    expect(authoredIslandsAfter.of[2]).toBe(authoredIslandsAfter.of[3]);
+    expect(authoredIslandsAfter.of[0]).not.toBe(authoredIslandsAfter.of[2]);
+
+    // Uniform world texel density across pinned Part 0 and xatlas-unwrapped Parts 1..3
+    const d = density(position, u.uv), m = median(d);
+    expect(d[0] / m).toBeGreaterThan(0.6);
+    expect(d[0] / m).toBeLessThan(1.5);
+  });
+
+  it('repacks two independently unwrapped parts overlapping on [0,1]^2 with zero xatlas calls', async () => {
+    const p0 = new THREE.PlaneGeometry(3, 3, 2, 2).toNonIndexed();
+    p0.setAttribute('label', new THREE.Float32BufferAttribute(new Float32Array(p0.getAttribute('position').count).fill(0), 1));
+    const p1 = new THREE.PlaneGeometry(3, 3, 2, 2).translate(5, 0, 0).toNonIndexed();
+    p1.setAttribute('label', new THREE.Float32BufferAttribute(new Float32Array(p1.getAttribute('position').count).fill(1), 1));
+    const merged = mergeGeometries([p0, p1])!;
+    const position = merged.getAttribute('position').array as Float32Array;
+    const uv = merged.getAttribute('uv').array as Float32Array;
+    const label = merged.getAttribute('label').array as Float32Array;
+
+    expect(uvHealth(position, uv, 256).overlap).toBeGreaterThan(0.9);
+    const u = await unwrap(position, label, run, { uv, preserveSeams: true });
+    expect(u.meshes).toBe(0); // 0 xatlas calls needed!
+    expect(u.preservedCharts).toBe(2);
+    expect(u.preservedSurface).toBeCloseTo(1, 5);
+    expect(uvHealth(position, u.uv, 512).problem).toBeUndefined();
   });
 });
 

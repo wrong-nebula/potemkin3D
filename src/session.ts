@@ -33,7 +33,7 @@ import { resizeRGBA } from './core/image';
 import { loadLevel, setTriangles, type Level } from './core/scene';
 import { objectEyes } from './core/object-plan';
 import { pathLayoutScale, playerImportance, rankTier, splitUvByRank, type PlayerImportance } from './core/player-paths';
-import { cavityScale, cellWeights, faceOpenness, suggestPresetsFromWeights, surfaceWeights, weightScale, writeWeightAttribute, type SurfaceWeights } from './core/surface-weights';
+import { cavityScale, cellWeights, faceCurvature, faceOpenness, suggestPresetsFromWeights, surfaceWeights, weightScale, writeWeightAttribute, type SurfaceWeights } from './core/surface-weights';
 import { unwrap as unwrapUVs, uvHealth, type UvHealth } from './core/unwrap';
 import { browserXatlas } from './core/xatlas-browser';
 import { MODELS, PART_MODEL } from './providers/models';
@@ -107,9 +107,20 @@ export class Session {
       if (this.level.missingUV?.length) uvHealthInfo.problem ??= `no texture coordinates on ${this.level.missingUV.join(', ')}`;
       const reason = unwrap === 'always' ? 'asked' : uvHealthInfo.problem;
       if (reason) {
-        const u = await unwrapUVs(position, g.getAttribute('label').array, browserXatlas());
+        const existingUv = g.getAttribute('uv').array;
+        const u = await unwrapUVs(position, g.getAttribute('label').array, browserXatlas(), {
+          ...(unwrap === 'auto' && !uvHealthInfo.missing ? { uv: existingUv, preserveSeams: true } : { preserveSeams: false }),
+        });
         g.setAttribute('uv', new THREE.Float32BufferAttribute(u.uv, 2));
-        this.level.unwrap = { reason, meshes: u.meshes, charts: u.charts, fill: u.fill, hash: layoutHash(u.uv), seconds: u.seconds };
+        this.level.unwrap = {
+          reason,
+          meshes: u.meshes,
+          charts: u.charts,
+          fill: u.fill,
+          ...(u.preservedCharts ? { preservedCharts: u.preservedCharts, preservedSurface: u.preservedSurface } : {}),
+          hash: layoutHash(u.uv),
+          seconds: u.seconds,
+        };
       }
     }
     // `area`: min x, y, z then max x, y, z of where players can be (see Level.playArea)
@@ -1375,7 +1386,7 @@ export class Session {
    * The finishing fill (core/finish.ts): give what no view painted its own part's colours, so nothing a player sees
    * is left as bare clay. Filled texels remain targets for any later view. No model call.
    */
-  finish() {
+  finish(opts: { grime?: number; edgeWear?: number } = {}) {
     const e = this.engine;
     if (!e || !this.record) throw new Error('paint or load a run first');
     const n = Math.min(1024, e.atlas.size);
@@ -1389,11 +1400,31 @@ export class Session {
       painted[i] = quality[i] > PAINTED ? 1 : 0;
       if (label[i] >= 0) island++;
     }
-    const f = fillColours(data, painted, label, n);
+    const g = e.level.geometry;
+    const pos = g.getAttribute('position').array;
+    const uv = g.getAttribute('uv').array;
+    const diffuse = !!this.record.options?.diffuse;
+    let wear: import('./core/finish').WearField | undefined;
+    if (!diffuse) {
+      const openTri = e.level.surfaceWeights?.openness ?? faceOpenness(pos, e.level.bvh).value;
+      const curv = faceCurvature(pos);
+      wear = {
+        openness: cellWeights(uv, openTri, n),
+        concave: cellWeights(uv, curv.concave, n),
+        convex: cellWeights(uv, curv.value, n),
+        grime: opts.grime ?? 0.22,
+        edgeWear: opts.edgeWear ?? 0.14,
+      };
+    }
+    const f = fillColours(data, painted, label, n, 24, wear);
     e.atlas.fillUnpainted(f.rgba, n);
     this.record.finished = true;
     this.viewer?.setMode('textured');
-    return { filled: island ? f.filled / island : 0, fromNeighbours: f.filled ? f.near / f.filled : 0 };
+    return {
+      filled: island ? f.filled / island : 0,
+      fromNeighbours: f.filled ? f.near / f.filled : 0,
+      ...(typeof f.weathered === 'number' && f.filled ? { weathered: f.weathered / f.filled } : {}),
+    };
   }
 
   async exportGlb(): Promise<ArrayBuffer> {

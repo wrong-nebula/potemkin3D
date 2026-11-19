@@ -11,6 +11,7 @@ import { checkView, GRID, viewFaces, type Planes, type Segment, type ViewFaces }
 import { bitmapToRGBA, resizeRGBA, toDataUrl } from './image';
 import { paintability } from './paintability';
 import { defectMap, fullDetail } from './defects';
+import { conditionStateWithWear } from './finish';
 import { DEFAULT_PLAN, FLOOR_BAND, cellDensity, holeLookViews, holeTargets, holeViews, lookViews, pixelsPerMetre, plan as makePlan, samplePlayerPoints, surfaceOf, type Plan, type PlanOptions } from './planner';
 import { nameParts } from './naming';
 import { classifyView, describeView } from './semantics';
@@ -122,6 +123,11 @@ export interface PipelineOptions {
   localWorkflow?: Record<string, unknown>;
   /** Route diminishing-return tail views (`plan.budget.localModelTailViews`) to local while keeping hero views on cloud. */
   localTail?: boolean;
+  /**
+   * Condition unpainted clay creases/ridges with subtle signed-curvature cavity grime and arris wear cues and ground
+   * prompts accordingly (`src/core/finish.ts`); automatically bypassed when `diffuse` (pure albedo) is enabled.
+   */
+  wearConditioning?: boolean;
 }
 
 export const DEFAULT_PIPELINE: PipelineOptions = {
@@ -131,6 +137,7 @@ export const DEFAULT_PIPELINE: PipelineOptions = {
   plainFills: true, diffuse: false, references: 2, gapNotes: false,
   firstModel: 'flux3-klein', fillModel: 'flux3-klein', mostlyNew: 0.75, feather: 10, seed: 7, plan: {},
   check: true, checkCells: false, checkThreshold: 0.5, checkRetries: 1, retryAbove: 0.01, minFresh: 0.01, checkPlanes: true, styleReference: false, nameParts: true,
+  wearConditioning: true,
 };
 
 import { NOTE_OPEN, drawNotes, gapNotes, notesInView, pinNotes, type Note, type NoteInView, type PinnedNote } from './notes';
@@ -374,16 +381,27 @@ export function prepareView(engine: Engine, spec: ViewSpec, o: PipelineOptions, 
     const big = scenery(engine);
     carried.push(...gapNotes(cls.label, unknown, labels, S, 3, 0.004, undefined, 0.3, (l) => big[l]));
   }
+  let conditionedState = state;
+  if ((o.wearConditioning ?? true) && !o.diffuse && !roofPass && !floorPass) {
+    const wear = conditionStateWithWear(state, unknown, pos, nrm, S);
+    conditionedState = wear.state;
+    if (wear.cavityShare >= 0.04 || wear.ridgeShare >= 0.03) {
+      prompt.wear = {
+        ...(wear.cavityShare >= 0.04 ? { cavity: true } : {}),
+        ...(wear.ridgeShare >= 0.03 ? { ridge: true } : {}),
+      };
+    }
+  }
   if (carried.length) {
     prompt.notes = carried.map((n) => n.note.text).join('; ');
-    sent = drawNotes(state, S, carried);
+    sent = drawNotes(conditionedState, S, carried);
   }
   if (spec.again) prompt.shapes = true;
   if (o.diffuse) prompt.diffuse = true;
   if (o.wording) prompt.wording = o.wording;
   if (o.setting) prompt.setting = o.setting;
   if ((fillPass || cleanPass) && o.plainFills && !carried.length) prompt.plain = true;   // a note asks for more than bare wall
-  return { spec, clay, state, ...(sent ? { sent, notes: carried } : {}), focus: focusOf(pos, unknown, cos), masks, geometry, faces: viewFaces(pos, nrm, S), cos, fresh, edit, keep, unknownFraction, isFirst, skip, model, prompt };
+  return { spec, clay, state: conditionedState, ...(sent ? { sent, notes: carried } : {}), focus: focusOf(pos, unknown, cos), masks, geometry, faces: viewFaces(pos, nrm, S), cos, fresh, edit, keep, unknownFraction, isFirst, skip, model, prompt };
 }
 
 /** Which parts are scenery: over 2% of the level's surface each (walls, floor, ceiling), as the part pass counts them. */

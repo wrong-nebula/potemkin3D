@@ -1,4 +1,4 @@
-import { uvIslands } from './layout';
+import { packBoxes, uvIslands } from './layout';
 
 /**
  * Texture coordinates made from scratch, for a level whose own are missing or can't hold a painting. Painting gives
@@ -134,6 +134,12 @@ export interface UnwrapOptions {
   /** Welded vertices per mesh at most. The WebAssembly build reads 16-bit indices and hands back as many, so the
    * vertices split along seams must stay under 65,536 too: this leaves room for that. */
   maxVertices: number;
+  /** Existing corner UVs (2 floats per corner) when preserving valid artist-authored UV seams/charts on partial unwraps. */
+  uv?: ArrayLike<number>;
+  /** When `uv` is supplied, keep valid non-overlapping low-stretch charts intact and run xatlas only on unhealthy parts (default true). */
+  preserveSeams?: boolean;
+  /** Maximum area-weighted singular-value stretch (`sigma_max / sigma_min`) for an authored chart to be pinned (default 2.5). */
+  maxAnisotropy?: number;
 }
 
 export const DEFAULT_UNWRAP: UnwrapOptions = { padding: 4, resolution: 2048, maxCost: 2, maxVertices: 24000 };
@@ -144,11 +150,18 @@ export type XatlasRunner = (meshes: AtlasMesh[], o: UnwrapOptions) => Promise<At
 /**
  * The level's triangles as meshes for xatlas: one per part (`label`), corners at the same place joined so charts
  * can span faces, and a part with more vertices than a mesh can take split into runs of triangles in file order.
+ * When `onlyTriangles` is given (`0` = skip, `1` = include), only included triangles are emitted.
  */
-export function atlasMeshes(position: ArrayLike<number>, label: ArrayLike<number> | undefined, maxVertices = DEFAULT_UNWRAP.maxVertices): AtlasMesh[] {
+export function atlasMeshes(
+  position: ArrayLike<number>,
+  label: ArrayLike<number> | undefined,
+  maxVertices = DEFAULT_UNWRAP.maxVertices,
+  onlyTriangles?: ArrayLike<number>,
+): AtlasMesh[] {
   const tris = Math.floor(position.length / 9);
   const byPart = new Map<number, number[]>();
   for (let t = 0; t < tris; t++) {
+    if (onlyTriangles && !onlyTriangles[t]) continue;
     const k = label ? label[3 * t] : 0;
     let list = byPart.get(k);
     if (!list) byPart.set(k, (list = []));
@@ -217,6 +230,299 @@ export function cornerUVs(tris: number, meshes: AtlasMesh[], result: AtlasResult
   return uv;
 }
 
+export interface ChartPartition {
+  /** 1 per triangle belonging to a valid artist-authored UV chart whose seams are preserved; 0 when sent to xatlas. */
+  pinnedTriangle: Uint8Array;
+  /** Number of artist-authored UV charts preserved intact. */
+  preservedCharts: number;
+  /** Number of charts sent to xatlas for re-charting. */
+  unwrappedCharts: number;
+  /** Share of total world surface area whose authored seams were preserved (0 to 1). */
+  preservedSurface: number;
+}
+
+/**
+ * Partition existing UV charts into valid artist-authored charts (non-degenerate, inside `[0, 1]²`, consistent winding,
+ * bounded singular-value stretch `sigma_max / sigma_min <= maxAnisotropy`, and free of intra-part stacking) versus
+ * unhealthy charts that require `xatlas` re-charting.
+ */
+export function partitionUvCharts(
+  position: ArrayLike<number>,
+  uv: ArrayLike<number>,
+  label: ArrayLike<number> | undefined,
+  opts: { maxAnisotropy?: number; grid?: number } = {},
+): ChartPartition {
+  const maxAniso = opts.maxAnisotropy ?? 2.5;
+  const grid = opts.grid ?? 256;
+  const tris = Math.floor(position.length / 9);
+  if (!tris || uv.length < tris * 6) {
+    return { pinnedTriangle: new Uint8Array(tris), preservedCharts: 0, unwrappedCharts: 0, preservedSurface: 0 };
+  }
+
+  const part = new Int32Array(tris);
+  for (let t = 0; t < tris; t++) part[t] = label ? Math.round(label[3 * t]) : 0;
+  const { of: chartOf, count: chartCount } = uvIslands(position, uv, part);
+
+  const chartPart = new Int32Array(chartCount);
+  const chartWorld = new Float64Array(chartCount);
+  const chartDegen = new Float64Array(chartCount);
+  const chartOutside = new Float64Array(chartCount);
+  const chartPosWinding = new Float64Array(chartCount);
+  const chartNegWinding = new Float64Array(chartCount);
+  const chartAnisoSum = new Float64Array(chartCount);
+  const chartMinU = new Float64Array(chartCount).fill(Infinity);
+  const chartMaxU = new Float64Array(chartCount).fill(-Infinity);
+  const chartMinV = new Float64Array(chartCount).fill(Infinity);
+  const chartMaxV = new Float64Array(chartCount).fill(-Infinity);
+  const triWorld = new Float64Array(tris);
+  const triOff = new Uint8Array(tris);
+
+  let totalSurface = 0;
+
+  for (let t = 0; t < tris; t++) {
+    const k = chartOf[t];
+    chartPart[k] = part[t];
+    const p = 9 * t;
+    const e1x = position[p + 3] - position[p], e1y = position[p + 4] - position[p + 1], e1z = position[p + 5] - position[p + 2];
+    const e2x = position[p + 6] - position[p], e2y = position[p + 7] - position[p + 1], e2z = position[p + 8] - position[p + 2];
+    const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x;
+    const world = 0.5 * Math.hypot(cx, cy, cz);
+    triWorld[t] = world;
+    totalSurface += world;
+    chartWorld[k] += world;
+
+    const q = 6 * t;
+    for (let c = 0; c < 3; c++) {
+      const u = uv[q + 2 * c], v = uv[q + 2 * c + 1];
+      chartMinU[k] = Math.min(chartMinU[k], u);
+      chartMaxU[k] = Math.max(chartMaxU[k], u);
+      chartMinV[k] = Math.min(chartMinV[k], v);
+      chartMaxV[k] = Math.max(chartMaxV[k], v);
+      if (u < -1e-4 || u > 1 + 1e-4 || v < -1e-4 || v > 1 + 1e-4) triOff[t] = 1;
+    }
+    if (triOff[t]) chartOutside[k] += world;
+
+    const s1 = uv[q + 2] - uv[q], t1 = uv[q + 3] - uv[q + 1];
+    const s2 = uv[q + 4] - uv[q], t2 = uv[q + 5] - uv[q + 1];
+    const det2 = s1 * t2 - s2 * t1;
+    const tex = 0.5 * Math.abs(det2);
+    if (world > 0 && tex < 1e-11) {
+      chartDegen[k] += world;
+      continue;
+    }
+    if (det2 > 0) chartPosWinding[k] += world;
+    else if (det2 < 0) chartNegWinding[k] += world;
+
+    if (world > 1e-10 && Math.abs(det2) > 1e-12) {
+      const inv = 1 / det2;
+      const ssx = (e1x * t2 - e2x * t1) * inv, ssy = (e1y * t2 - e2y * t1) * inv, ssz = (e1z * t2 - e2z * t1) * inv;
+      const stx = (e2x * s1 - e1x * s2) * inv, sty = (e2y * s1 - e1y * s2) * inv, stz = (e2z * s1 - e1z * s2) * inv;
+      const a = ssx * ssx + ssy * ssy + ssz * ssz;
+      const b = ssx * stx + ssy * sty + ssz * stz;
+      const c = stx * stx + sty * sty + stz * stz;
+      const disc = Math.sqrt(Math.max(0, (a - c) * (a - c) + 4 * b * b));
+      const sigMax2 = 0.5 * (a + c + disc);
+      const sigMin2 = Math.max(1e-18, 0.5 * (a + c - disc));
+      const aniso = Math.min(50, Math.sqrt(sigMax2 / sigMin2));
+      chartAnisoSum[k] += world * aniso;
+    }
+  }
+
+  const keepChart = new Uint8Array(chartCount).fill(1);
+  for (let k = 0; k < chartCount; k++) {
+    const w = chartWorld[k];
+    if (w <= 1e-10) { keepChart[k] = 0; continue; }
+    if (chartDegen[k] / w > HEALTH_LIMITS.degenerate) { keepChart[k] = 0; continue; }
+    if (chartOutside[k] / w > HEALTH_LIMITS.outside) { keepChart[k] = 0; continue; }
+    if (Math.min(chartPosWinding[k], chartNegWinding[k]) / w > 0.02) { keepChart[k] = 0; continue; }
+    if (chartAnisoSum[k] / w > maxAniso) { keepChart[k] = 0; continue; }
+  }
+
+  // Evict stacked identical-bbox charts within the same part (e.g. default BoxGeometry faces or mirrored shells).
+  const byPartCharts = new Map<number, number[]>();
+  for (let k = 0; k < chartCount; k++) {
+    if (!keepChart[k]) continue;
+    let list = byPartCharts.get(chartPart[k]);
+    if (!list) byPartCharts.set(chartPart[k], (list = []));
+    list.push(k);
+  }
+  for (const list of byPartCharts.values()) {
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      for (let j = i + 1; j < list.length; j++) {
+        const b = list[j];
+        if (
+          Math.abs(chartMinU[a] - chartMinU[b]) < 2e-3 &&
+          Math.abs(chartMaxU[a] - chartMaxU[b]) < 2e-3 &&
+          Math.abs(chartMinV[a] - chartMinV[b]) < 2e-3 &&
+          Math.abs(chartMaxV[a] - chartMaxV[b]) < 2e-3
+        ) {
+          keepChart[a] = 0;
+          keepChart[b] = 0;
+        }
+      }
+    }
+  }
+
+  // Intra-part raster overlap check (two distinct parts occupying [0,1]^2 independently are allowed and repacked).
+  const trisByChart: number[][] = Array.from({ length: chartCount }, () => []);
+  for (let t = 0; t < tris; t++) if (!triOff[t] && triWorld[t] > 0) trisByChart[chartOf[t]].push(t);
+
+  const owner = new Int32Array(grid * grid);
+  for (const list of byPartCharts.values()) {
+    // Greedily evict overlapping charts within the same part until remaining charts in this part do not collide.
+    while (true) {
+      const active = list.filter((k) => keepChart[k]);
+      if (active.length <= 1) break;
+      owner.fill(-1);
+      const covered = new Int32Array(chartCount);
+      const collided = new Int32Array(chartCount);
+      for (const k of active) {
+        for (const t of trisByChart[k]) {
+          const q = 6 * t;
+          const x0 = uv[q] * grid, y0 = uv[q + 1] * grid, x1 = uv[q + 2] * grid, y1 = uv[q + 3] * grid, x2 = uv[q + 4] * grid, y2 = uv[q + 5] * grid;
+          const d = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+          if (Math.abs(d) < 1e-12) continue;
+          const ia = Math.max(0, Math.floor(Math.min(x0, x1, x2))), ib = Math.min(grid - 1, Math.ceil(Math.max(x0, x1, x2)));
+          const ja = Math.max(0, Math.floor(Math.min(y0, y1, y2))), jb = Math.min(grid - 1, Math.ceil(Math.max(y0, y1, y2)));
+          for (let j = ja; j <= jb; j++) {
+            const py = j + 0.5;
+            for (let i = ia; i <= ib; i++) {
+              const px = i + 0.5;
+              const w1 = ((px - x0) * (y2 - y0) - (x2 - x0) * (py - y0)) / d;
+              const w2 = ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)) / d;
+              if (w1 < 0 || w2 < 0 || w1 + w2 > 1) continue;
+              const cell = j * grid + i;
+              covered[k]++;
+              const prev = owner[cell];
+              if (prev < 0) owner[cell] = k;
+              else if (prev !== k) {
+                collided[k]++;
+                collided[prev]++;
+              }
+            }
+          }
+        }
+      }
+      let worst = -1, worstShare = HEALTH_LIMITS.overlap;
+      for (const k of active) {
+        const share = covered[k] > 0 ? collided[k] / covered[k] : 0;
+        if (share > worstShare || (share === worstShare && worst >= 0 && chartWorld[k] < chartWorld[worst])) {
+          worstShare = share;
+          worst = k;
+        }
+      }
+      if (worst < 0) break;
+      keepChart[worst] = 0;
+    }
+  }
+
+  const pinnedTriangle = new Uint8Array(tris);
+  let preservedCharts = 0, unwrappedCharts = 0, preservedArea = 0;
+  for (let k = 0; k < chartCount; k++) {
+    if (keepChart[k]) {
+      preservedCharts++;
+      preservedArea += chartWorld[k];
+    } else if (chartWorld[k] > 0) {
+      unwrappedCharts++;
+    }
+  }
+  for (let t = 0; t < tris; t++) if (keepChart[chartOf[t]]) pinnedTriangle[t] = 1;
+
+  return {
+    pinnedTriangle,
+    preservedCharts,
+    unwrappedCharts,
+    preservedSurface: totalSurface > 0 ? preservedArea / totalSurface : 0,
+  };
+}
+
+function packCombinedCharts(
+  position: ArrayLike<number>,
+  uv: ArrayLike<number>,
+  chartGroup: ArrayLike<number>,
+  margin: number,
+): { uv: Float32Array; charts: number; fill: number } {
+  const tris = Math.floor(position.length / 9);
+  const { of, count } = uvIslands(position, uv, chartGroup);
+  const minU = new Float64Array(count).fill(Infinity), maxU = new Float64Array(count).fill(-Infinity);
+  const minV = new Float64Array(count).fill(Infinity), maxV = new Float64Array(count).fill(-Infinity);
+  const worldArea = new Float64Array(count), uvArea = new Float64Array(count);
+
+  for (let t = 0; t < tris; t++) {
+    const k = of[t];
+    const p = 9 * t;
+    const ax = position[p + 3] - position[p], ay = position[p + 4] - position[p + 1], az = position[p + 5] - position[p + 2];
+    const bx = position[p + 6] - position[p], by = position[p + 7] - position[p + 1], bz = position[p + 8] - position[p + 2];
+    const cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+    worldArea[k] += 0.5 * Math.hypot(cx, cy, cz);
+
+    const q = 6 * t;
+    for (let v = 0; v < 3; v++) {
+      const u = uv[q + 2 * v], w = uv[q + 2 * v + 1];
+      minU[k] = Math.min(minU[k], u); maxU[k] = Math.max(maxU[k], u);
+      minV[k] = Math.min(minV[k], w); maxV[k] = Math.max(maxV[k], w);
+    }
+    uvArea[k] += 0.5 * Math.abs((uv[q + 2] - uv[q]) * (uv[q + 5] - uv[q + 1]) - (uv[q + 4] - uv[q]) * (uv[q + 3] - uv[q + 1]));
+  }
+
+  const relScale = new Float64Array(count);
+  const bw = new Float64Array(count), bh = new Float64Array(count);
+  let estBoxArea = 0;
+  for (let k = 0; k < count; k++) {
+    relScale[k] = uvArea[k] > 1e-12 && worldArea[k] > 1e-12 ? Math.sqrt(worldArea[k] / uvArea[k]) : 1;
+    bw[k] = Math.max(1e-6, (maxU[k] - minU[k]) * relScale[k]);
+    bh[k] = Math.max(1e-6, (maxV[k] - minV[k]) * relScale[k]);
+    estBoxArea += bw[k] * bh[k];
+  }
+
+  const pad = Math.min(margin, 0.25 / Math.max(1, Math.ceil(Math.sqrt(count))));
+  const w = new Float32Array(count), h = new Float32Array(count);
+  const tryAt = (g: number) => {
+    for (let k = 0; k < count; k++) {
+      w[k] = bw[k] * g + pad;
+      h[k] = bh[k] * g + pad;
+    }
+    return packBoxes(w, h);
+  };
+
+  const maxDim = Math.max(...bw, ...bh, 1e-6);
+  let lo = 0, hi = Math.min((1 - pad) / maxDim, estBoxArea > 0 ? 2 / Math.sqrt(estBoxArea) : 1 / maxDim);
+  let best: ReturnType<typeof packBoxes> | undefined;
+  for (let i = 0; i < 30; i++) {
+    const g = i === 0 ? hi * 0.05 : 0.5 * (lo + hi);
+    const p = tryAt(g);
+    if (p.height <= 1) {
+      lo = g;
+      best = { x: p.x.slice(), y: p.y.slice(), height: p.height };
+    } else {
+      hi = g;
+    }
+    if (i === 0 && !best) {
+      const tiny = tryAt(hi * 1e-4);
+      if (tiny.height <= 1) {
+        lo = hi * 1e-4;
+        best = { x: tiny.x.slice(), y: tiny.y.slice(), height: tiny.height };
+      } else break;
+    }
+  }
+  if (!best) throw new Error('could not pack combined UV charts into unit square');
+
+  const out = new Float32Array(tris * 6);
+  let fill = 0;
+  for (let t = 0; t < tris; t++) {
+    const k = of[t];
+    const s = relScale[k] * lo;
+    const q = 6 * t;
+    for (let v = 0; v < 3; v++) {
+      out[q + 2 * v] = Math.min(1, Math.max(0, best.x[k] + pad * 0.5 + (uv[q + 2 * v] - minU[k]) * s));
+      out[q + 2 * v + 1] = Math.min(1, Math.max(0, best.y[k] + pad * 0.5 + (uv[q + 2 * v + 1] - minV[k]) * s));
+    }
+    fill += 0.5 * Math.abs((out[q + 2] - out[q]) * (out[q + 5] - out[q + 1]) - (out[q + 4] - out[q]) * (out[q + 3] - out[q + 1]));
+  }
+  return { uv: out, charts: count, fill };
+}
+
 export interface Unwrap {
   uv: Float32Array;
   meshes: number;
@@ -224,15 +530,60 @@ export interface Unwrap {
   charts: number;
   /** Share of the square the charts' texels fill. */
   fill: number;
+  /** Artist-authored UV charts preserved intact when `opts.uv` was supplied. */
+  preservedCharts?: number;
+  /** Share of total world surface area whose authored UV seams were preserved (0 to 1). */
+  preservedSurface?: number;
   seconds: number;
 }
 
-/** Unwrap a level's triangles (world space, non-indexed) with xatlas. */
+/** Unwrap a level's triangles (world space, non-indexed) with xatlas, optionally pinning healthy artist-authored UV charts. */
 export async function unwrap(position: ArrayLike<number>, label: ArrayLike<number> | undefined, run: XatlasRunner,
   opts: Partial<UnwrapOptions> = {}): Promise<Unwrap> {
   const o = { ...DEFAULT_UNWRAP, ...opts };
   const t0 = performance.now();
   const tris = Math.floor(position.length / 9);
+
+  if (o.uv && (o.preserveSeams ?? true)) {
+    const part = partitionUvCharts(position, o.uv, label, { maxAnisotropy: o.maxAnisotropy });
+    if (part.preservedCharts > 0) {
+      const combined = Float32Array.from(o.uv);
+      const needUnwrap = new Uint8Array(tris);
+      let anyUnwrap = false;
+      for (let t = 0; t < tris; t++) {
+        if (!part.pinnedTriangle[t]) {
+          needUnwrap[t] = 1;
+          anyUnwrap = true;
+        }
+      }
+      let meshCount = 0;
+      if (anyUnwrap) {
+        const meshes = atlasMeshes(position, label, o.maxVertices, needUnwrap);
+        meshCount = meshes.length;
+        const result = await run(meshes, o);
+        if (result.atlasCount > 1) throw new Error(`xatlas made ${result.atlasCount} textures; expected one`);
+        const xuv = cornerUVs(tris, meshes, result);
+        for (let t = 0; t < tris; t++) {
+          if (needUnwrap[t]) {
+            for (let c = 0; c < 6; c++) combined[6 * t + c] = xuv[6 * t + c];
+          }
+        }
+      }
+      const group = new Int32Array(tris);
+      for (let t = 0; t < tris; t++) group[t] = (label ? Math.round(label[3 * t]) : 0) * 2 + part.pinnedTriangle[t];
+      const packed = packCombinedCharts(position, combined, group, (2 * o.padding) / o.resolution);
+      return {
+        uv: packed.uv,
+        meshes: meshCount,
+        charts: packed.charts,
+        fill: packed.fill,
+        preservedCharts: part.preservedCharts,
+        preservedSurface: part.preservedSurface,
+        seconds: (performance.now() - t0) / 1000,
+      };
+    }
+  }
+
   const meshes = atlasMeshes(position, label, o.maxVertices);
   const result = await run(meshes, o);
   if (result.atlasCount > 1) throw new Error(`xatlas made ${result.atlasCount} textures; expected one`);
@@ -242,7 +593,14 @@ export async function unwrap(position: ArrayLike<number>, label: ArrayLike<numbe
     const q = 6 * t;
     fill += Math.abs((uv[q + 2] - uv[q]) * (uv[q + 5] - uv[q + 1]) - (uv[q + 4] - uv[q]) * (uv[q + 3] - uv[q + 1])) / 2;
   }
-  return { uv, meshes: meshes.length, charts: uvIslands(position, uv).count, fill, seconds: (performance.now() - t0) / 1000 };
+  return {
+    uv,
+    meshes: meshes.length,
+    charts: uvIslands(position, uv).count,
+    fill,
+    ...(o.uv && (o.preserveSeams ?? true) ? { preservedCharts: 0, preservedSurface: 0 } : {}),
+    seconds: (performance.now() - t0) / 1000,
+  };
 }
 
 /** xatlas chart and pack options for `UnwrapOptions`. */

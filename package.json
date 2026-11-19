@@ -27,6 +27,7 @@
   "dependencies": {
     "@fal-ai/client": "^1.10.1",
     "@huggingface/transformers": "^4.3.2",
+    "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/server": "2.4.0",
     "@pierre/highlights": "^0.5.1",
     "@pierre/words": "^0.2.2",
@@ -40,7 +41,6 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^26.6.5",
     "@types/three": "^0.186.0",
     "playwright": "^1.64.1",
