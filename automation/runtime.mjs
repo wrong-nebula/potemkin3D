@@ -115,11 +115,11 @@ export async function executeJob(kind,input,ctx) {
       else if(step.op==='selfTest')args=[step.views??2];
       let value;
       if(step.op==='export') {
-        const encoded=await page.evaluate(async()=>{
-          const bytes=new Uint8Array(await window.trompe.exportGlb());let binary='';
+        const encoded=await page.evaluate(async(expOpts)=>{
+          const bytes=new Uint8Array(await window.trompe.exportGlb(expOpts));let binary='';
           for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
           return btoa(binary);
-        });
+        },step.options??{});
         value=ctx.artifact(step.output??`step-${index+1}.glb`,Buffer.from(encoded,'base64'),'model/gltf-binary');
       } else {
         // Only the validated discriminated union can select a method; no arbitrary script evaluation API.

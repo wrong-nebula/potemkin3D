@@ -4,6 +4,14 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { aoImage, withOcclusion } from './ao';
 import type { Engine } from './engine';
 import { toCanvas } from './image';
+import { encodeUastcKtx2, rewriteGlbWithKtx2 } from './ktx2';
+
+export interface ExportOptions {
+  /** Texture container inside the GLB: `'png'` (default) or `'ktx2'` (Khronos UASTC 4×4 `KHR_texture_basisu`). */
+  format?: 'png' | 'ktx2';
+  /** Generate a box-filtered mipmap pyramid inside each KTX2 texture when `format === 'ktx2'` (default true). */
+  mipmaps?: boolean;
+}
 
 /**
  * The level as one mesh with the painted texture. Painted under overcast light it is albedo, so it goes on a lit
@@ -15,19 +23,28 @@ import { toCanvas } from './image';
  * each), its faces carrying their coordinates on their own page; maps made over the whole texture space are cut
  * to the pages.
  */
-export async function exportGlb(engine: Engine): Promise<ArrayBuffer> {
+export async function exportGlb(engine: Engine, opts: ExportOptions = {}): Promise<ArrayBuffer> {
+  const useKtx2 = opts.format === 'ktx2';
+  const mipmaps = opts.mipmaps ?? true;
   const atlas = engine.atlas, grid = atlas.grid;
   const textures: THREE.Texture[] = [];
+  const ktx2ByName = new Map<string, Uint8Array>();
+  let texCounter = 0;
   const texture = (pixels: Uint8ClampedArray, s: number, colour = false) => {
     const t = new THREE.CanvasTexture(toCanvas(pixels, s, s)); // rows already in glTF order (first row = v 0)
     t.flipY = false;
+    t.name = `pk_tex_${texCounter++}`;
     if (colour) t.colorSpace = THREE.SRGBColorSpace;
     textures.push(t);
+    if (useKtx2) {
+      ktx2ByName.set(t.name, encodeUastcKtx2(pixels, s, s, { srgb: colour, mipmaps }));
+    }
     return t;
   };
   const { pbr, ao } = engine;
-  // one image for occlusion (R, when baked), roughness (G) and metalness (B, all 0): glTF's ORM packing as it is
-  const ormAll = pbr ? (ao ? withOcclusion(pbr.orm, pbr.size, ao) : pbr.orm) : undefined;
+  // one image for occlusion (R, when baked), roughness (G) and metalness (B): joint-bilateral upsampled when ao.size < pbr.size
+  const ormGuide = pbr && ao && ao.size !== pbr.size && ao.guide ? atlas.texelGeometry(pbr.size) : undefined;
+  const ormAll = pbr ? (ao ? withOcclusion(pbr.orm, pbr.size, ao, ormGuide) : pbr.orm) : undefined;
   const aoAll = ao && !pbr ? aoImage(ao) : undefined;
   const material = (k: number): THREE.Material => {
     const map = texture(grid === 1 ? atlas.readBytes().data : atlas.pageBytes(k), atlas.pageSize, true);
@@ -51,10 +68,10 @@ export async function exportGlb(engine: Engine): Promise<ArrayBuffer> {
     mesh = new THREE.Mesh(paged.geometry, paged.pages.map(material));
   }
   mesh.name = engine.level.name;
-  const glb = await new GLTFExporter().parseAsync(mesh, { binary: true, maxTextureSize: atlas.pageSize });
+  const glb = (await new GLTFExporter().parseAsync(mesh, { binary: true, maxTextureSize: atlas.pageSize })) as ArrayBuffer;
   for (const t of textures) t.dispose();
   made?.dispose();
-  return glb as ArrayBuffer;
+  return useKtx2 ? rewriteGlbWithKtx2(glb, ktx2ByName) : glb;
 }
 
 /** The part of a square map (`size` px, made over the whole texture space) that lies on page `k`. */

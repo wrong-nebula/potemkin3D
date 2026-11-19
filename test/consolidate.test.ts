@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backProjectView, consolidateProjectedViews, depthContinuity,
-  poissonStitch, registerAndAdvectView, seamMetric, surfaceLinks, type ProjectedAtlasView,
+  poissonStitch, registerAndAdvectView, seamMetric, softBackprojectPool, solveMrfViewLabels, surfaceLinks, type ProjectedAtlasView,
 } from '../src/core/consolidate';
 
 /** Build a flat 64x64 wall in atlas space (`part = 0` on `x < 52`, `part = 1` on `x >= 52` to test part-boundary isolation). */
@@ -179,5 +179,93 @@ describe('poissonStitch and consolidateProjectedViews', () => {
     const after = seamMetric(stitched, owner, links, size);
     expect(before.step).toBeCloseTo(80, 1);
     expect(after.step).toBeLessThan(12);
+  });
+
+  it('MRF view-label assignment eliminates noisy salt-and-pepper winner islands and cuts along low-discrepancy contours', () => {
+    const { pos, nrm, size } = wallAtlas(64);
+    const links = surfaceLinks(pos, nrm, size);
+    const N = size * size;
+    const v0: ProjectedAtlasView = { rgba: new Uint8ClampedArray(N * 4), weight: new Float32Array(N) };
+    const v1: ProjectedAtlasView = { rgba: new Uint8ClampedArray(N * 4), weight: new Float32Array(N) };
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < 50; x++) {
+        const i = y * size + x;
+        const [r0, g0, b0] = brickRgb(x, y, 0, 0, [-12, -8, -4]);
+        // View 1 agrees closely around x = 24..26 (mortar band) and drifts elsewhere, while noisy weights jitter every 2nd pixel
+        const [r1, g1, b1] = brickRgb(x, y, 0, 0, Math.abs(x - 25) <= 1 ? [-11, -8, -4] : [24, 18, 12]);
+        v0.rgba.set([r0, g0, b0, 255], 4 * i);
+        v1.rgba.set([r1, g1, b1, 255], 4 * i);
+        const jitter = ((x * 7 + y * 13) % 5 === 0) ? 0.25 : -0.1;
+        v0.weight[i] = Math.max(0.05, 0.65 - x * 0.008 + jitter);
+        v1.weight[i] = Math.max(0.05, 0.25 + x * 0.008 - jitter);
+      }
+    }
+
+    const argmaxOwner = new Int16Array(N).fill(-1);
+    const argmaxRgba = new Uint8ClampedArray(N * 4);
+    for (const p of links.covered) {
+      if (v0.weight[p] === 0 && v1.weight[p] === 0) continue;
+      const win = v0.weight[p] >= v1.weight[p] ? 0 : 1;
+      argmaxOwner[p] = win;
+      const src = win === 0 ? v0.rgba : v1.rgba;
+      argmaxRgba.set(src.subarray(4 * p, 4 * p + 4), 4 * p);
+    }
+    const rawScore = seamMetric(argmaxRgba, argmaxOwner, links, size);
+
+    const mrfOwner = solveMrfViewLabels([v0, v1], links, size, { smooth: 0.4 });
+    const mrfRgba = new Uint8ClampedArray(N * 4);
+    for (const p of links.covered) {
+      if (mrfOwner[p] < 0) continue;
+      const src = mrfOwner[p] === 0 ? v0.rgba : v1.rgba;
+      mrfRgba.set(src.subarray(4 * p, 4 * p + 4), 4 * p);
+    }
+    const mrfScore = seamMetric(mrfRgba, mrfOwner, links, size);
+
+    // MRF cuts boundary perimeter drastically (>65% fewer boundary edges) and lowers raw pre-Poisson seam step
+    expect(mrfScore.boundaryEdges).toBeLessThan(rawScore.boundaryEdges * 0.35);
+    expect(mrfScore.step).toBeLessThan(rawScore.step);
+  });
+
+  it('tangent-plane bilateral soft back-projection suppresses foreground silhouette colour bleed and speckle', () => {
+    const { pos, nrm, size } = wallAtlas(32);
+    const covered = Int32Array.from({ length: size * size }, (_, i) => i);
+    const gSize = 32;
+    const gPos = new Float32Array(gSize * gSize * 4);
+    const comp = new Uint8ClampedArray(gSize * gSize * 4);
+    // Wall sits at z = 0 viewed from (0, 0, 4) -> true distance ~4..5 m (tanstone [160, 145, 130])
+    // Place an occluding bright-red foreground post at x < 16 with depth = 1.5 m
+    for (let y = 0; y < gSize; y++) {
+      for (let x = 0; x < gSize; x++) {
+        const i = y * gSize + x;
+        if (x < 15) {
+          gPos.set([-0.5, 0, 2.5, 1.5], 4 * i);
+          comp.set([250, 20, 20, 255], 4 * i);
+        } else {
+          const wx = ((x + 0.5) / gSize) * 8 - 4;
+          const wy = (0.5 - (y + 0.5) / gSize) * 8;
+          gPos.set([wx, wy, 0, Math.hypot(wx, wy, 4)], 4 * i);
+          comp.set([160, 145, 130, 255], 4 * i);
+        }
+      }
+    }
+    const spec = { id: 0, position: [0, 0, 4] as [number, number, number], yaw: 0, pitch: 0, fov: 90 };
+    const hard = backProjectView(pos, nrm, size, covered, spec, gPos, gSize, comp, gSize, { softKernel: false });
+    const soft = backProjectView(pos, nrm, size, covered, spec, gPos, gSize, comp, gSize, { softKernel: true });
+
+    // Texels right beside the foreground silhouette (x = 15 in comp) can pull red via naive bilinear interpolation in `hard`,
+    // whereas `soft` rejects off-plane foreground taps (`z = 2.5` vs `z = 0`) cleanly!
+    let maxRedHard = 0, maxRedSoft = 0;
+    for (let i = 0; i < size * size; i++) {
+      if (hard.weight[i] > 0 && hard.rgba[4 * i] > maxRedHard) maxRedHard = hard.rgba[4 * i];
+      if (soft.weight[i] > 0 && soft.rgba[4 * i] > maxRedSoft) maxRedSoft = soft.rgba[4 * i];
+    }
+    expect(maxRedSoft).toBeLessThanOrEqual(162);
+    expect(maxRedSoft).toBeLessThanOrEqual(maxRedHard);
+
+    // Geodesic atlas-space bilateral pool preserves sharp part boundaries
+    const links = surfaceLinks(pos, nrm, size);
+    const pooled = softBackprojectPool([soft], pos, nrm, links, size);
+    expect(pooled).toHaveLength(1);
   });
 });

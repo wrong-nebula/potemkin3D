@@ -587,3 +587,116 @@ export async function runLocalEdit(model: EditModel, input: EditInput, signal?: 
   if (found.backend === 'hunyuan3d') return runHunyuanEdit(model, input, signal, resolved);
   return runDiffusersEdit(model, input, signal, resolved);
 }
+
+/**
+ * Build a ComfyUI `KSamplerAdvanced` partial-step workflow (`start_at_step` → `end_at_step`, `return_with_leftover_noise: 'disable'`)
+ * returning the decoded clean prediction `x̂_0^{(t)}` for TexFusion's Sequential Interlaced Multiview Sampler (`src/core/texfusion.ts`)
+ * and SDEdit-based Score Distillation Sampling (`src/core/gaussian-field.ts`).
+ */
+export function buildComfyStepWorkflow(
+  prompt: string,
+  files: { image: string; mask?: string; ref?: string },
+  stepCfg: { seed: number; totalSteps: number; startStep: number; endStep: number; cfg?: number; checkpoint?: string },
+): Record<string, unknown> {
+  const ckpt = stepCfg.checkpoint ?? 'flux1-dev-fp8.safetensors';
+  const graph: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+    '2': { class_type: 'LoadImage', inputs: { image: files.image } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['1', 1] } },
+    '4': { class_type: 'CLIPTextEncode', inputs: { text: 'text, watermark, blurry, seams, harsh shadows', clip: ['1', 1] } },
+  };
+  let posLink: [string, number] = ['3', 0];
+  let negLink: [string, number] = ['4', 0];
+  let latLink: [string, number];
+
+  if (files.ref) {
+    graph['5'] = { class_type: 'LoadImage', inputs: { image: files.ref } };
+    graph['6'] = { class_type: 'VAEEncode', inputs: { pixels: ['5', 0], vae: ['1', 2] } };
+    graph['7'] = { class_type: 'ReferenceLatent', inputs: { conditioning: ['3', 0], latent: ['6', 0] } };
+    posLink = ['7', 0];
+  }
+  if (files.mask) {
+    graph['11'] = { class_type: 'LoadImageMask', inputs: { image: files.mask, channel: 'red' } };
+    graph['12'] = {
+      class_type: 'InpaintModelConditioning',
+      inputs: { positive: posLink, negative: negLink, vae: ['1', 2], pixels: ['2', 0], mask: ['11', 0], noise_mask: true },
+    };
+    posLink = ['12', 0];
+    negLink = ['12', 1];
+    latLink = ['12', 2];
+  } else {
+    graph['12'] = { class_type: 'VAEEncode', inputs: { pixels: ['2', 0], vae: ['1', 2] } };
+    latLink = ['12', 0];
+  }
+
+  graph['15'] = {
+    class_type: 'KSamplerAdvanced',
+    inputs: {
+      add_noise: 'enable',
+      noise_seed: stepCfg.seed,
+      steps: stepCfg.totalSteps,
+      cfg: stepCfg.cfg ?? 3.5,
+      sampler_name: 'euler',
+      scheduler: 'simple',
+      positive: posLink,
+      negative: negLink,
+      latent_image: latLink,
+      start_at_step: stepCfg.startStep,
+      end_at_step: stepCfg.endStep,
+      return_with_leftover_noise: 'disable',
+      model: ['1', 0],
+    },
+  };
+  graph['16'] = { class_type: 'VAEDecode', inputs: { samples: ['15', 0], vae: ['1', 2] } };
+  graph['17'] = { class_type: 'SaveImage', inputs: { images: ['16', 0], filename_prefix: 'potemkin_step' } };
+  return graph;
+}
+
+/**
+ * Invoke a local diffusers `/texfusion/step` or `/sds/score` tensor endpoint (`Float32Array` latent/RGB step) when
+ * running local-GPU research spikes (`TODO.md` #3 & #11).
+ */
+export async function runLocalLatentStep(
+  endpointPath: '/texfusion/step' | '/sds/score',
+  payload: {
+    latent: Float32Array;
+    channels: number;
+    height: number;
+    width: number;
+    sigma: number;
+    sigmaNext?: number;
+    prompt: string;
+    seed: number;
+  },
+  opts: ProviderOptions = {},
+  signal?: AbortSignal,
+): Promise<Float32Array> {
+  const baseUrl = trimSlash(opts.localUrl ?? DEFAULT_LOCAL_URLS.diffusers);
+  const res = await localFetch(
+    `${baseUrl}${endpointPath}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        prompt: payload.prompt,
+        channels: payload.channels,
+        height: payload.height,
+        width: payload.width,
+        sigma: payload.sigma,
+        sigma_next: payload.sigmaNext ?? 0,
+        seed: payload.seed,
+        latent: Array.from(payload.latent),
+        model: opts.localModel ?? 'flux1-dev',
+      }),
+      signal,
+    },
+    opts.fetchImpl,
+  );
+  if (!res.ok) throw new Error(`Local ${endpointPath} failed: ${res.status}`);
+  const data = (await res.json()) as { latent?: number[]; grad?: number[]; x0?: number[] };
+  const arr = data.x0 ?? data.latent ?? data.grad;
+  if (!arr || arr.length !== payload.latent.length) {
+    throw new Error(`Local ${endpointPath} returned mismatched tensor length`);
+  }
+  return Float32Array.from(arr);
+}

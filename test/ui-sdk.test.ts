@@ -216,6 +216,26 @@ describe('Potemkin Studio ui-sdk interface & agent bridge', () => {
       );
       await page.keyboard.press('Escape');
 
+      // Exercise KTX2 GLB export + /api/dcc-sync round-trip from Material tab
+      const ktx2AndDcc = await page.evaluate(async () => {
+        const ag = (window as unknown as { agent: { act: (p: object) => Promise<{ ok: boolean; error?: { message: string } }> } }).agent;
+        const r = await ag.act({
+          steps: [
+            { ref: 'Inspector sections', action: 'setValue', args: ['Material'] },
+            { ref: 'GLB texture format', action: 'setValue', args: ['KTX2 · UASTC (4× VRAM)'] },
+            { ref: 'DCC target', action: 'setValue', args: ['Blender + Unreal'] },
+            { ref: 'Sync to DCC', action: 'press' },
+          ],
+        });
+        const ktxGlb = await (window as unknown as { trompe: { exportGlb: (o: object) => Promise<ArrayBuffer> } }).trompe.exportGlb({ format: 'ktx2' });
+        const dv = new DataView(ktxGlb);
+        const jLen = dv.getUint32(12, true);
+        const jText = new TextDecoder().decode(new Uint8Array(ktxGlb, 20, jLen));
+        return { ok: r.ok, err: r.error?.message, hasBasisu: jText.includes('KHR_texture_basisu') };
+      });
+      expect(ktx2AndDcc.ok, ktx2AndDcc.err).toBe(true);
+      expect(ktx2AndDcc.hasBasisu).toBe(true);
+
       await page.evaluate(async () => {
         const ag = (window as unknown as { agent: { act: (p: object) => Promise<{ ok: boolean }> } }).agent;
         await ag.act({ steps: [{ ref: 'Inspector sections', action: 'setValue', args: ['Plan'] }] });

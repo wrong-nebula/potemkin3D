@@ -52,7 +52,7 @@ export function makeApi(session: Session) {
   return {
     session,
     /** Stable binary export for CLI/MCP adapters; does not trigger a browser download. */
-    exportGlb: () => session.exportGlb(),
+    exportGlb: (opts?: import('./core/export').ExportOptions) => session.exportGlb(opts),
     /** Configure or inspect the model provider router ('fal' | 'local' | 'auto'), optionally probing local endpoints. */
     async provider(opts: ProviderOptions & { probe?: boolean } = {}) {
       const { probe, ...rest } = opts;

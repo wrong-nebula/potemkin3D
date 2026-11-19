@@ -1,6 +1,7 @@
 /* Modified from Patch Trompe by the Potemkin contributors; see NOTICE and PROVENANCE.md. */
 import * as THREE from 'three';
 import { byteTarget, floatTarget, passMaterial, type Gpu } from './gpu';
+import { estimatePlaneTolerance, JBU_ATLAS_GLSL } from './jbu';
 import type { Level } from './scene';
 
 /**
@@ -226,6 +227,70 @@ void main() {
     return;
   }
   vec4 d = texture(delta, uv);
+  if (d.a < 0.5) return;
+  vec3 off = (d.rgb - vec3(128.0 / 255.0)) * (255.0 / 127.0);
+  outColor = vec4(clamp(c.rgb + off, 0.0, 1.0), c.a);
+}`;
+
+/** Joint-bilateral-upsampled (`mrdoob/three.js#35602`) 1K → 4K/8K consolidation writeback guided by `(vWorld, vNormal, vLabel)` vs `(lowPosTex, lowNrmTex)`. */
+const CONSOLIDATE_JBU_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D src;
+uniform sampler2D paint;
+uniform sampler2D delta;
+uniform sampler2D lowPosTex;
+uniform sampler2D lowNrmTex;
+uniform float planeTolerance;
+uniform vec3 page;
+in vec3 vWorld;
+in vec3 vNormal;
+flat in float vLabel;
+layout(location = 0) out vec4 outColor;
+${JBU_ATLAS_GLSL}
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(src, p, 0);
+  outColor = c;
+  if (c.a <= 0.0003) return;
+  vec2 uv = (page.xy + gl_FragCoord.xy / vec2(textureSize(src, 0))) / page.z;
+  vec3 fn = normalize(vNormal);
+  vec4 d = jbuSampleAtlas(delta, lowPosTex, lowNrmTex, uv, vWorld, fn, vLabel, planeTolerance, false);
+  if (d.a < 0.5) return;
+  vec3 off = (d.rgb - vec3(128.0 / 255.0)) * (255.0 / 127.0);
+  vec3 corrected = clamp(c.rgb + off, 0.0, 1.0);
+  vec4 u = jbuSampleAtlas(paint, lowPosTex, lowNrmTex, uv, vWorld, fn, vLabel, planeTolerance, false);
+  float seam = clamp((u.a - 0.52) / 0.45, 0.0, 1.0);
+  outColor = vec4(mix(corrected, u.rgb, seam), c.a);
+}`;
+
+/** Joint-bilateral-upsampled (`mrdoob/three.js#35602`) 1K → 4K/8K UV refinement writeback (coverage-weighted `inpaint` + plane/normal-guarded `delta`). */
+const UV_REFINE_JBU_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D src;
+uniform sampler2D inpaint;
+uniform sampler2D delta;
+uniform sampler2D lowPosTex;
+uniform sampler2D lowNrmTex;
+uniform float planeTolerance;
+uniform float quality;
+uniform vec3 page;
+in vec3 vWorld;
+in vec3 vNormal;
+flat in float vLabel;
+layout(location = 0) out vec4 outColor;
+${JBU_ATLAS_GLSL}
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(src, p, 0);
+  outColor = c;
+  vec2 uv = (page.xy + gl_FragCoord.xy / vec2(textureSize(src, 0))) / page.z;
+  vec3 fn = normalize(vNormal);
+  if (c.a <= 0.0003) {
+    vec4 f = jbuSampleAtlas(inpaint, lowPosTex, lowNrmTex, uv, vWorld, fn, vLabel, planeTolerance, true);
+    if (f.a > 0.5) outColor = vec4(f.rgb, quality);
+    return;
+  }
+  vec4 d = jbuSampleAtlas(delta, lowPosTex, lowNrmTex, uv, vWorld, fn, vLabel, planeTolerance, false);
   if (d.a < 0.5) return;
   vec3 off = (d.rgb - vec3(128.0 / 255.0)) * (255.0 / 127.0);
   outColor = vec4(clamp(c.rgb + off, 0.0, 1.0), c.a);
@@ -647,16 +712,62 @@ export class Atlas {
     this.revision++;
   }
 
-  /** Apply a consolidated low-frequency offset across all pages while blending `paintRgba` across sub-cell view-boundary ribbons (`paint.a = 255` on seams, `128` inside). */
-  applyConsolidation(paintRgba: Uint8ClampedArray, deltaRgba: Uint8ClampedArray, n: number) {
+  /** Apply a consolidated low-frequency offset across all pages while blending `paintRgba` across sub-cell view-boundary ribbons (`paint.a = 255` on seams, `128` inside). Uses Joint Bilateral Upsampling when `lowGuide` is supplied. */
+  applyConsolidation(paintRgba: Uint8ClampedArray, deltaRgba: Uint8ClampedArray, n: number, lowGuide?: { pos: Float32Array; nrm: Float32Array }) {
+    const useJbu = !!lowGuide && n < this.size;
     const paintTex = new THREE.DataTexture(paintRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
-    paintTex.minFilter = paintTex.magFilter = THREE.LinearFilter;
+    paintTex.minFilter = paintTex.magFilter = useJbu ? THREE.NearestFilter : THREE.LinearFilter;
     paintTex.premultiplyAlpha = false;
     paintTex.needsUpdate = true;
     const deltaTex = new THREE.DataTexture(deltaRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
-    deltaTex.minFilter = deltaTex.magFilter = THREE.LinearFilter;
+    deltaTex.minFilter = deltaTex.magFilter = useJbu ? THREE.NearestFilter : THREE.LinearFilter;
     deltaTex.premultiplyAlpha = false;
     deltaTex.needsUpdate = true;
+
+    if (useJbu && lowGuide) {
+      const lowPosTex = new THREE.DataTexture(lowGuide.pos, n, n, THREE.RGBAFormat, THREE.FloatType);
+      lowPosTex.minFilter = lowPosTex.magFilter = THREE.NearestFilter;
+      lowPosTex.needsUpdate = true;
+      const lowNrmTex = new THREE.DataTexture(lowGuide.nrm, n, n, THREE.RGBAFormat, THREE.FloatType);
+      lowNrmTex.minFilter = lowNrmTex.magFilter = THREE.NearestFilter;
+      lowNrmTex.needsUpdate = true;
+      const tol = estimatePlaneTolerance({ pos: lowGuide.pos, nrm: lowGuide.nrm, size: n });
+      const mat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: UV_VERT,
+        fragmentShader: CONSOLIDATE_JBU_FRAG,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+          src: { value: null },
+          paint: { value: paintTex },
+          delta: { value: deltaTex },
+          lowPosTex: { value: lowPosTex },
+          lowNrmTex: { value: lowNrmTex },
+          planeTolerance: { value: tol },
+          page: this.pageU,
+        },
+      });
+      this.eachPage((page, k) => {
+        this.copyMat.uniforms.src.value = page.a.texture;
+        this.gpu.pass(this.copyMat, this.b);
+        mat.uniforms.src.value = page.a.texture;
+        this.uvMesh.material = mat;
+        this.gpu.draw(this.uvScene, this.uvCam, this.b, null);
+        this.uvMesh.material = this.islandMat;
+        this.swap(page);
+        this.padPage(page, k);
+      });
+      mat.dispose();
+      lowPosTex.dispose();
+      lowNrmTex.dispose();
+      paintTex.dispose();
+      deltaTex.dispose();
+      this.revision++;
+      return;
+    }
+
     const mat = passMaterial(CONSOLIDATE_PAINT_FRAG, { src: { value: null }, paint: { value: paintTex }, delta: { value: deltaTex }, page: this.pageU });
     this.eachPage((page, k) => {
       mat.uniforms.src.value = page.a.texture;
@@ -670,18 +781,67 @@ export class Atlas {
     this.revision++;
   }
 
-  /** Apply UV-space inpainting to unpainted island texels (at `quality > PAINTED`, driving unpainted share to ~0 without `finish.ts`) and signed delighting/sharpening deltas to painted texels. */
-  applyUvRefinement(inpaintRgba: Uint8ClampedArray, deltaRgba: Uint8ClampedArray, n: number, quality = UV_REFINE_QUALITY) {
+  /** Apply UV-space inpainting to unpainted island texels (at `quality > PAINTED`, driving unpainted share to ~0 without `finish.ts`) and signed delighting/sharpening deltas to painted texels. Uses Joint Bilateral Upsampling when `lowGuide` is supplied. */
+  applyUvRefinement(inpaintRgba: Uint8ClampedArray, deltaRgba: Uint8ClampedArray, n: number, quality = UV_REFINE_QUALITY, lowGuide?: { pos: Float32Array; nrm: Float32Array }) {
+    const useJbu = !!lowGuide && n < this.size;
     const inpaintCopy = new Uint8ClampedArray(inpaintRgba);
-    for (let i = 0; i < inpaintCopy.length; i += 4) if (!inpaintCopy[i + 3]) inpaintCopy[i] = inpaintCopy[i + 1] = inpaintCopy[i + 2] = 0;
+    if (!useJbu) {
+      for (let i = 0; i < inpaintCopy.length; i += 4) if (!inpaintCopy[i + 3]) inpaintCopy[i] = inpaintCopy[i + 1] = inpaintCopy[i + 2] = 0;
+    }
     const inpaintTex = new THREE.DataTexture(inpaintCopy, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
-    inpaintTex.minFilter = inpaintTex.magFilter = THREE.LinearFilter;
+    inpaintTex.minFilter = inpaintTex.magFilter = useJbu ? THREE.NearestFilter : THREE.LinearFilter;
     inpaintTex.premultiplyAlpha = false;
     inpaintTex.needsUpdate = true;
     const deltaTex = new THREE.DataTexture(deltaRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
-    deltaTex.minFilter = deltaTex.magFilter = THREE.LinearFilter;
+    deltaTex.minFilter = deltaTex.magFilter = useJbu ? THREE.NearestFilter : THREE.LinearFilter;
     deltaTex.premultiplyAlpha = false;
     deltaTex.needsUpdate = true;
+
+    if (useJbu && lowGuide) {
+      const lowPosTex = new THREE.DataTexture(lowGuide.pos, n, n, THREE.RGBAFormat, THREE.FloatType);
+      lowPosTex.minFilter = lowPosTex.magFilter = THREE.NearestFilter;
+      lowPosTex.needsUpdate = true;
+      const lowNrmTex = new THREE.DataTexture(lowGuide.nrm, n, n, THREE.RGBAFormat, THREE.FloatType);
+      lowNrmTex.minFilter = lowNrmTex.magFilter = THREE.NearestFilter;
+      lowNrmTex.needsUpdate = true;
+      const tol = estimatePlaneTolerance({ pos: lowGuide.pos, nrm: lowGuide.nrm, size: n });
+      const mat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: UV_VERT,
+        fragmentShader: UV_REFINE_JBU_FRAG,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+          src: { value: null },
+          inpaint: { value: inpaintTex },
+          delta: { value: deltaTex },
+          lowPosTex: { value: lowPosTex },
+          lowNrmTex: { value: lowNrmTex },
+          planeTolerance: { value: tol },
+          quality: { value: quality },
+          page: this.pageU,
+        },
+      });
+      this.eachPage((page, k) => {
+        this.copyMat.uniforms.src.value = page.a.texture;
+        this.gpu.pass(this.copyMat, this.b);
+        mat.uniforms.src.value = page.a.texture;
+        this.uvMesh.material = mat;
+        this.gpu.draw(this.uvScene, this.uvCam, this.b, null);
+        this.uvMesh.material = this.islandMat;
+        this.swap(page);
+        this.padPage(page, k);
+      });
+      mat.dispose();
+      lowPosTex.dispose();
+      lowNrmTex.dispose();
+      inpaintTex.dispose();
+      deltaTex.dispose();
+      this.revision++;
+      return;
+    }
+
     const mat = passMaterial(UV_REFINE_FRAG, {
       src: { value: null }, islands: { value: null }, inpaint: { value: inpaintTex }, delta: { value: deltaTex },
       quality: { value: quality }, page: this.pageU,

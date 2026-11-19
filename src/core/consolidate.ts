@@ -44,6 +44,12 @@ export interface ConsolidateOptions {
   maxShift?: number;
   /** Screening anchor weight `λ` on the confidence-weighted mean colour (default 0.02). */
   lambda?: number;
+  /** Solve a contrast-sensitive MRF view-label assignment on the surface graph for coherent intra-patch gradients (default true). */
+  mrf?: boolean;
+  /** Pairwise MRF Potts smoothness weight `γ` (default 0.35). */
+  mrfSmooth?: number;
+  /** Use tangent-plane & depth-weighted bilateral soft back-projection attention instead of hard point sampling (default false). */
+  softBackproject?: boolean;
   /** Minimum view cosine (default `engine.options.minCos`). */
   minCos?: number;
   /** Frame border margin skipped during back-projection (default `engine.options.frameMargin`). */
@@ -56,6 +62,8 @@ export interface ConsolidateResult {
   /** Views whose overlap triggered non-zero tangent-flow advection. */
   flowAdvected: number;
   before: SeamScore;
+  /** Seam score of the discrete MRF label assignment prior to Screened-Poisson stitching (when `mrf` is enabled). */
+  mrfBefore?: SeamScore;
   after: SeamScore;
   seconds: number;
 }
@@ -102,9 +110,10 @@ export function backProjectView(
   gSize: number,
   comp: ArrayLike<number>,
   compSize: number,
-  opts: { detail?: number; minCos?: number; frameMargin?: number } = {},
+  opts: { detail?: number; minCos?: number; frameMargin?: number; softKernel?: boolean } = {},
 ): ProjectedAtlasView {
   const detail = opts.detail ?? 1, minCos = opts.minCos ?? 0.08, margin = opts.frameMargin ?? 0;
+  const softKernel = opts.softKernel ?? false;
   const cam = makeCamera(spec);
   const lens = cam.projectionMatrix.elements[5] || 1;
   const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).elements;
@@ -140,9 +149,59 @@ export function backProjectView(
     const gd = gPos[4 * gi + 3];
     if (gd > 0 && dist > gd + 0.025 + 0.015 * dist) continue;   // occluded by nearer geometry
 
-    // Bilinear sample from premultiplied `comp` (top-down).
+    // Bilinear sample from premultiplied `comp` (top-down), or tangent-plane bilateral soft attention kernel (`softKernel`).
     const fx = Math.min(compSize - 1, Math.max(0, u * compSize - 0.5));
     const fy = Math.min(compSize - 1, Math.max(0, vTop * compSize - 0.5));
+    if (softKernel) {
+      const cxPx = Math.round(fx), cyPx = Math.round(fy);
+      const planeTau = 0.018 + 0.012 * dist;
+      const depthTau = 0.03 * dist + 0.02;
+      const nx = texelNrm[p4], ny = texelNrm[p4 + 1], nz = texelNrm[p4 + 2];
+      let sr = 0, sg = 0, sb = 0, sw = 0, sCont = 0, maxA = 0;
+      for (let ky = -1; ky <= 1; ky++) {
+        const py = cyPx + ky;
+        if (py < 0 || py >= compSize) continue;
+        const gyTap = Math.min(gSize - 1, Math.max(0, Math.floor(((py + 0.5) / compSize) * gSize)));
+        for (let kx = -1; kx <= 1; kx++) {
+          const px = cxPx + kx;
+          if (px < 0 || px >= compSize) continue;
+          const ci = 4 * (py * compSize + px);
+          const ca = comp[ci + 3];
+          if (ca < 96) continue;
+          const gxTap = Math.min(gSize - 1, Math.max(0, Math.floor(((px + 0.5) / compSize) * gSize)));
+          const gTap = gyTap * gSize + gxTap;
+          const td = gPos[4 * gTap + 3];
+          if (td > 0 && dist > td + 0.03 + 0.018 * dist) continue;
+          let wGeo = 1;
+          if (td > 0) {
+            const planeDist = Math.abs(nx * (gPos[4 * gTap] - wx) + ny * (gPos[4 * gTap + 1] - wy) + nz * (gPos[4 * gTap + 2] - wz));
+            const depthDiff = Math.abs(td - dist);
+            wGeo = Math.exp(-(planeDist * planeDist) / (2 * planeTau * planeTau) - (depthDiff * depthDiff) / (2 * depthTau * depthTau));
+          }
+          const dpx = px - fx, dpy = py - fy;
+          const wSpatial = Math.exp(-(dpx * dpx + dpy * dpy) / (2 * 0.85 * 0.85));
+          const wAlpha = ca / 255;
+          const att = wSpatial * wGeo * wAlpha;
+          if (att < 1e-5) continue;
+          const invTapA = 255 / ca;
+          sr += att * (comp[ci] * invTapA);
+          sg += att * (comp[ci + 1] * invTapA);
+          sb += att * (comp[ci + 2] * invTapA);
+          sCont += att * (td > 0 ? dCont[gTap] : 0.5);
+          sw += att;
+          if (ca > maxA) maxA = ca;
+        }
+      }
+      if (sw < 1e-4 || maxA < 128) continue;
+      rgba[p4] = Math.round(sr / sw);
+      rgba[p4 + 1] = Math.round(sg / sw);
+      rgba[p4 + 2] = Math.round(sb / sw);
+      rgba[p4 + 3] = 255;
+      const rim = Math.min(1, (ndcLimit - Math.max(Math.abs(ndcX), Math.abs(ndcY))) / 0.08, (maxA - 128) / 96);
+      const cont = sCont / sw;
+      weight[p] = Math.max(1e-5, ((detail * lens * cosv) / Math.max(dist, 0.5)) * cont * Math.max(0.05, rim));
+      continue;
+    }
     const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(compSize - 1, x0 + 1), y1 = Math.min(compSize - 1, y0 + 1);
     const tx = fx - x0, ty = fy - y0;
     const i00 = 4 * (y0 * compSize + x0), i10 = 4 * (y0 * compSize + x1), i01 = 4 * (y1 * compSize + x0), i11 = 4 * (y1 * compSize + x1);
@@ -590,17 +649,184 @@ export function seamMetric(
 }
 
 /**
+ * Contrast-sensitive Markov Random Field (MRF) view-label solver on the `surfaceLinks` graph (`TODO.md` #3).
+ * Replaces noisy per-texel argmax view selection with piecewise-coherent patches whose cuts follow low-discrepancy
+ * texture contours:
+ *   E(L) = Σ_p -log(max(w_{L_p}(p), ε)) + Σ_{(p,q)∈E, L_p ≠ L_q} [ γ_0 + γ_1 · (||I_{L_p}(p)-I_{L_q}(p)||_2 + ||I_{L_p}(q)-I_{L_q}(q)||_2) / 510 ]
+ * Optimised via red-black checkerboard Iterated Conditional Modes (ICM) over observed candidate labels per texel.
+ */
+export function solveMrfViewLabels(
+  views: { rgba: Uint8ClampedArray; weight: Float32Array }[],
+  links: ReturnType<typeof surfaceLinks>,
+  size: number,
+  opts: { smooth?: number; colorPenalty?: number; passes?: number } = {},
+): Int16Array {
+  const N = size * size;
+  const gamma0 = opts.smooth ?? 0.35;
+  const gamma1 = opts.colorPenalty ?? 1.25;
+  const passes = opts.passes ?? 6;
+  const labels = new Int16Array(N).fill(-1);
+
+  // Initialise with maximum-confidence view per covered texel
+  for (let k = 0; k < links.covered.length; k++) {
+    const p = links.covered[k];
+    let bestV = -1, bestW = 0;
+    for (let v = 0; v < views.length; v++) {
+      const w = views[v].weight[p];
+      if (w > bestW) { bestW = w; bestV = v; }
+    }
+    labels[p] = bestV;
+  }
+
+  const pairCost = (p: number, q: number, u: number, v: number): number => {
+    if (u === v || v < 0) return 0;
+    const p4 = 4 * p, q4 = 4 * q;
+    const iu = views[u].rgba, iv = views[v].rgba;
+    // Where both views observe the edge, penalise cutting across mismatched RGB features; otherwise charge 2 * gamma0.
+    const uHasQ = views[u].weight[q] > 0, vHasP = views[v].weight[p] > 0;
+    if (!uHasQ || !vHasP) return gamma0 * 1.5;
+    const dp = Math.hypot(iu[p4] - iv[p4], iu[p4 + 1] - iv[p4 + 1], iu[p4 + 2] - iv[p4 + 2]);
+    const dq = Math.hypot(iu[q4] - iv[q4], iu[q4 + 1] - iv[q4 + 1], iu[q4 + 2] - iv[q4 + 2]);
+    return gamma0 + gamma1 * ((dp + dq) / (2 * 441.673));
+  };
+
+  for (let it = 0; it < passes; it++) {
+    let changed = 0;
+    for (let parity = 0; parity < 2; parity++) {
+      for (let k = 0; k < links.covered.length; k++) {
+        const p = links.covered[k];
+        const x = p % size, y = (p / size) | 0;
+        if (((x + y) & 1) !== parity) continue;
+        const cur = labels[p];
+        if (cur < 0) continue;
+
+        const nbrs: number[] = [];
+        if (links.right[p] && labels[p + 1] >= 0) nbrs.push(p + 1);
+        if (x > 0 && links.right[p - 1] && labels[p - 1] >= 0) nbrs.push(p - 1);
+        if (links.down[p] && labels[p + size] >= 0) nbrs.push(p + size);
+        if (y > 0 && links.down[p - size] && labels[p - size] >= 0) nbrs.push(p - size);
+        if (!nbrs.length) continue;
+
+        // Candidate labels: current + best-weight + neighbour labels that validly observe `p`
+        let bestLabel = cur;
+        let bestEnergy = Infinity;
+        for (let v = 0; v < views.length; v++) {
+          const w = views[v].weight[p];
+          if (!(w > 0)) continue;
+          let e = -Math.log(Math.max(w, 1e-6)) * 0.45;
+          for (let ni = 0; ni < nbrs.length; ni++) {
+            const q = nbrs[ni];
+            e += pairCost(p, q, v, labels[q]);
+          }
+          if (e < bestEnergy - 1e-6) {
+            bestEnergy = e;
+            bestLabel = v;
+          }
+        }
+        if (bestLabel !== cur) {
+          labels[p] = bestLabel;
+          changed++;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return labels;
+}
+
+/**
+ * Im2SurfTex-inspired geodesic bilateral attention pooling in atlas space (`TODO.md` #3):
+ * attends over surface-linked 3×3 projected texels per view weighted by 3D world-space proximity, surface normal
+ * alignment `(n_p · n_q)^8`, and local projection confidence `w_v(q)` before multi-view fusion.
+ */
+export function softBackprojectPool(
+  views: { rgba: Uint8ClampedArray; weight: Float32Array }[],
+  pos: ArrayLike<number>,
+  nrm: ArrayLike<number>,
+  links: ReturnType<typeof surfaceLinks>,
+  size: number,
+  opts: { spatialSigma?: number; temperature?: number } = {},
+): ProjectedAtlasView[] {
+  const temp = Math.max(0.15, opts.temperature ?? 0.65);
+  // Estimate typical world texel spacing from linked neighbours
+  let stepSum = 0, stepCount = 0;
+  for (let k = 0; k < links.covered.length; k += 4) {
+    const p = links.covered[k];
+    if (links.right[p]) {
+      const p4 = 4 * p, q4 = p4 + 4;
+      stepSum += Math.hypot(pos[q4] - pos[p4], pos[q4 + 1] - pos[p4 + 1], pos[q4 + 2] - pos[p4 + 2]);
+      stepCount++;
+    }
+  }
+  const sigmaWorld = (opts.spatialSigma ?? 1.15) * (stepCount ? stepSum / stepCount : 0.05);
+  const inv2Sigma2 = 1 / Math.max(1e-8, 2 * sigmaWorld * sigmaWorld);
+
+  return views.map((pv) => {
+    const outRgba = new Uint8ClampedArray(pv.rgba);
+    const outW = new Float32Array(pv.weight);
+    for (let k = 0; k < links.covered.length; k++) {
+      const p = links.covered[k];
+      if (!(pv.weight[p] > 0)) continue;
+      const x = p % size, y = (p / size) | 0;
+      const p4 = 4 * p;
+      const px = pos[p4], py = pos[p4 + 1], pz = pos[p4 + 2];
+      const nx = nrm[p4], ny = nrm[p4 + 1], nz = nrm[p4 + 2];
+      const partP = links.part[p];
+
+      let sr = 0, sg = 0, sb = 0, sw = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= size) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= size) continue;
+          const q = yy * size + xx;
+          if (links.part[q] !== partP || !(pv.weight[q] > 0)) continue;
+          const q4 = 4 * q;
+          const ndot = nx * nrm[q4] + ny * nrm[q4 + 1] + nz * nrm[q4 + 2];
+          if (ndot < 0.85) continue;
+          const d2 = (pos[q4] - px) ** 2 + (pos[q4 + 1] - py) ** 2 + (pos[q4 + 2] - pz) ** 2;
+          const wGeo = Math.exp(-d2 * inv2Sigma2) * Math.pow(ndot, 8);
+          const wConf = Math.pow(pv.weight[q], 1 / temp);
+          // Bilateral Photometric guard so sharp mortar/brick edges inside a view never blur
+          const cDiff2 =
+            (pv.rgba[q4] - pv.rgba[p4]) ** 2 +
+            (pv.rgba[q4 + 1] - pv.rgba[p4 + 1]) ** 2 +
+            (pv.rgba[q4 + 2] - pv.rgba[p4 + 2]) ** 2;
+          const wPhoto = dx === 0 && dy === 0 ? 1 : Math.exp(-cDiff2 / (2 * 26 * 26));
+          const att = wGeo * wConf * wPhoto;
+          sr += att * pv.rgba[q4];
+          sg += att * pv.rgba[q4 + 1];
+          sb += att * pv.rgba[q4 + 2];
+          sw += att;
+        }
+      }
+      if (sw > 0) {
+        outRgba[p4] = Math.round(sr / sw);
+        outRgba[p4 + 1] = Math.round(sg / sw);
+        outRgba[p4 + 2] = Math.round(sb / sw);
+        outRgba[p4 + 3] = 255;
+      }
+    }
+    return { rgba: outRgba, weight: outW };
+  });
+}
+
+/**
  * Pure-array consolidation pipeline over already back-projected views: tangent-flow registration + advection,
- * winner-seam baseline scoring, sharpness-weighted gradient assembly, and Screened-Poisson stitch.
+ * optional MRF view-label assignment & bilateral soft back-projection pooling, sharpness-weighted gradient assembly,
+ * and Screened-Poisson stitch.
  */
 export function consolidateProjectedViews(
   projected: ProjectedAtlasView[],
   pos: ArrayLike<number>,
   nrm: ArrayLike<number>,
   size: number,
-  opts: { flow?: boolean; maxShift?: number; lambda?: number; qualityRatio?: number } = {},
+  opts: { flow?: boolean; maxShift?: number; lambda?: number; qualityRatio?: number; mrf?: boolean; mrfSmooth?: number; softBackproject?: boolean } = {},
 ) {
   const useFlow = opts.flow !== false, maxShift = opts.maxShift ?? 3.0, lambda = opts.lambda ?? 0.02, ratio = opts.qualityRatio ?? 0.4;
+  const useMrf = opts.mrf !== false;
+  const useSoft = opts.softBackproject ?? false;
   const N = size * size;
   const links = surfaceLinks(pos, nrm, size);
 
@@ -622,12 +848,11 @@ export function consolidateProjectedViews(
   }
   const before = seamMetric(hardRgba, owner, links, size);
 
-  // 2. Stream views into the Screened-Poisson accumulators (`sumRgb`, `sumW`, `gx`, `gy`), registering overlapping views via tangent flow first.
-  const sumRgb = new Float32Array(N * 3), sumW = new Float32Array(N);
-  const gxSum = new Float32Array(N * 3), gxW = new Float32Array(N);
-  const gySum = new Float32Array(N * 3), gyW = new Float32Array(N);
+  // 2. Register overlapping views via high-pass tangent flow first so all views share a structurally aligned UV frame.
+  const sumRgbInit = new Float32Array(N * 3), sumWInit = new Float32Array(N);
   const refMean = new Float32Array(N * 3);
   let flowAdvected = 0;
+  let aligned: ProjectedAtlasView[] = [];
 
   for (let v = 0; v < projected.length; v++) {
     const pv = projected[v];
@@ -635,28 +860,67 @@ export function consolidateProjectedViews(
     if (useFlow && v > 0) {
       for (let k = 0; k < links.covered.length; k++) {
         const p = links.covered[k];
-        if (sumW[p] > 0) {
-          refMean[3 * p] = sumRgb[3 * p] / sumW[p];
-          refMean[3 * p + 1] = sumRgb[3 * p + 1] / sumW[p];
-          refMean[3 * p + 2] = sumRgb[3 * p + 2] / sumW[p];
+        if (sumWInit[p] > 0) {
+          refMean[3 * p] = sumRgbInit[3 * p] / sumWInit[p];
+          refMean[3 * p + 1] = sumRgbInit[3 * p + 1] / sumWInit[p];
+          refMean[3 * p + 2] = sumRgbInit[3 * p + 2] / sumWInit[p];
         }
       }
-      const reg = registerAndAdvectView(pv, refMean, sumW, links, size, maxShift);
+      const reg = registerAndAdvectView(pv, refMean, sumWInit, links, size, maxShift);
       rgba = reg.rgba;
       if (reg.moved) flowAdvected++;
     }
+    aligned.push({ rgba, weight: pv.weight });
+    for (let k = 0; k < links.covered.length; k++) {
+      const p = links.covered[k], w = pv.weight[p];
+      if (!(w > 0)) continue;
+      sumRgbInit[3 * p] += w * rgba[4 * p];
+      sumRgbInit[3 * p + 1] += w * rgba[4 * p + 1];
+      sumRgbInit[3 * p + 2] += w * rgba[4 * p + 2];
+      sumWInit[p] += w;
+    }
+  }
 
+  if (useSoft) {
+    aligned = softBackprojectPool(aligned, pos, nrm, links, size);
+  }
+
+  // 3. Optional MRF patch-to-view assignment for ghost-free intra-patch spatial gradients and cleaner seam cuts.
+  let mrfOwner: Int16Array | undefined;
+  let mrfBefore: SeamScore | undefined;
+  if (useMrf) {
+    mrfOwner = solveMrfViewLabels(aligned, links, size, { smooth: opts.mrfSmooth ?? 0.35 });
+    const mrfHard = new Uint8ClampedArray(N * 4);
+    for (let k = 0; k < links.covered.length; k++) {
+      const p = links.covered[k], lv = mrfOwner[p];
+      if (lv < 0) continue;
+      const p4 = 4 * p, src = aligned[lv].rgba;
+      mrfHard[p4] = src[p4]; mrfHard[p4 + 1] = src[p4 + 1]; mrfHard[p4 + 2] = src[p4 + 2]; mrfHard[p4 + 3] = 255;
+    }
+    mrfBefore = seamMetric(mrfHard, mrfOwner, links, size);
+  }
+
+  // 4. Assemble Screened-Poisson data term (`sumRgb`, `sumW`) and coherent gradients (`gx`, `gy`).
+  const sumRgb = new Float32Array(N * 3), sumW = new Float32Array(N);
+  const gxSum = new Float32Array(N * 3), gxW = new Float32Array(N);
+  const gySum = new Float32Array(N * 3), gyW = new Float32Array(N);
+
+  for (let v = 0; v < aligned.length; v++) {
+    const pv = aligned[v], rgba = pv.rgba;
     for (let k = 0; k < links.covered.length; k++) {
       const p = links.covered[k], w = pv.weight[p];
       if (!(w > 0)) continue;
       const p4 = 4 * p, p3 = 3 * p;
-      sumRgb[p3] += w * rgba[p4];
-      sumRgb[p3 + 1] += w * rgba[p4 + 1];
-      sumRgb[p3 + 2] += w * rgba[p4 + 2];
-      sumW[p] += w;
+      const dataBoost = mrfOwner && mrfOwner[p] === v ? 1.5 : 1.0;
+      const wd = w * dataBoost;
+      sumRgb[p3] += wd * rgba[p4];
+      sumRgb[p3 + 1] += wd * rgba[p4 + 1];
+      sumRgb[p3 + 2] += wd * rgba[p4 + 2];
+      sumW[p] += wd;
 
       if (links.right[p] && pv.weight[p + 1] > 0) {
-        const ew = Math.min(w, pv.weight[p + 1]) ** 2;
+        const mrfMatch = mrfOwner && mrfOwner[p] === v && mrfOwner[p + 1] === v ? 6.0 : 1.0;
+        const ew = Math.min(w, pv.weight[p + 1]) ** 2 * mrfMatch;
         const q4 = p4 + 4;
         gxSum[p3] += ew * (rgba[q4] - rgba[p4]);
         gxSum[p3 + 1] += ew * (rgba[q4 + 1] - rgba[p4 + 1]);
@@ -664,7 +928,8 @@ export function consolidateProjectedViews(
         gxW[p] += ew;
       }
       if (links.down[p] && pv.weight[p + size] > 0) {
-        const ew = Math.min(w, pv.weight[p + size]) ** 2;
+        const mrfMatch = mrfOwner && mrfOwner[p] === v && mrfOwner[p + size] === v ? 6.0 : 1.0;
+        const ew = Math.min(w, pv.weight[p + size]) ** 2 * mrfMatch;
         const q4 = 4 * (p + size);
         gySum[p3] += ew * (rgba[q4] - rgba[p4]);
         gySum[p3 + 1] += ew * (rgba[q4 + 1] - rgba[p4 + 1]);
@@ -696,8 +961,9 @@ export function consolidateProjectedViews(
   }
 
   const stitched = poissonStitch(dataRgb, sumW, gx, gy, links, size, lambda);
+  const seamOwner = mrfOwner ?? owner;
   const after = seamMetric(stitched, owner, links, size);
-  return { hardRgba, stitched, owner, links, before, after, flowAdvected };
+  return { hardRgba, stitched, owner, seamOwner, mrfBefore, links, before, after, flowAdvected };
 }
 
 /** Dilate an RGBA8 map a few cells into empty (`alpha = 0`) UV gutters so bilinear upsampling never pulls neutral gutter bytes onto island rims. */
@@ -755,6 +1021,7 @@ export function consolidateViews(
         detail: v.detail ?? 1,
         minCos: opts.minCos ?? engine.options.minCos,
         frameMargin: opts.frameMargin ?? engine.options.frameMargin,
+        softKernel: opts.softBackproject,
       }));
     }
   } finally {
@@ -770,6 +1037,9 @@ export function consolidateViews(
     flow: opts.flow,
     maxShift: opts.maxShift,
     lambda: opts.lambda,
+    mrf: opts.mrf,
+    mrfSmooth: opts.mrfSmooth,
+    softBackproject: opts.softBackproject,
     qualityRatio: engine.options.qualityRatio,
   });
 
@@ -800,7 +1070,7 @@ export function consolidateViews(
         paint[4 * i + 3] = onSeam ? 255 : 128;
       }
     }
-    engine.atlas.applyConsolidation(paint, dilateGutter(delta, size, 3), size);
+    engine.atlas.applyConsolidation(paint, dilateGutter(delta, size, 3), size, { pos, nrm });
   }
 
   return {
@@ -808,6 +1078,7 @@ export function consolidateViews(
     views: projected.length,
     flowAdvected: c.flowAdvected,
     before: c.before,
+    ...(c.mrfBefore ? { mrfBefore: c.mrfBefore } : {}),
     after: c.after,
     seconds: +((performance.now() - t0) / 1000).toFixed(3),
   };

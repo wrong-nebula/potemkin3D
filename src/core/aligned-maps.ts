@@ -148,9 +148,10 @@ export interface SeparatePbrChannels {
 export function unpackLinearPbrChannels(
   maps: { size: number; normal: Uint8ClampedArray; orm: Uint8ClampedArray; source?: AlignedMapSource },
   ao?: AoMap,
+  fullGuide?: { pos: Float32Array; nrm: Float32Array },
 ): SeparatePbrChannels {
   const { size } = maps, N = size * size;
-  const orm = ao ? withOcclusion(maps.orm, size, ao) : new Uint8ClampedArray(maps.orm);
+  const orm = ao ? withOcclusion(maps.orm, size, ao, fullGuide) : new Uint8ClampedArray(maps.orm);
   const roughness = new Uint8ClampedArray(N * 4);
   const metalness = new Uint8ClampedArray(N * 4);
   const occlusion = new Uint8ClampedArray(N * 4);

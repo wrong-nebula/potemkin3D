@@ -838,7 +838,7 @@ export async function refineUvAtlas(engine: Engine, opts: UvRefineOptions = {}, 
     }
   }
 
-  engine.atlas.applyUvRefinement(delit.rgba, paintDelta, size, UV_REFINE_QUALITY);
+  engine.atlas.applyUvRefinement(delit.rgba, paintDelta, size, UV_REFINE_QUALITY, { pos, nrm });
 
   const afterQ = engine.atlas.cellQuality(size);
   let unpAfter = 0;

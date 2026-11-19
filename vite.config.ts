@@ -178,6 +178,32 @@ function falProxy(): Plugin {
           fail(res, 500, `doc read error: ${(e as Error).message}`);
         }
       });
+      server.middlewares.use('/api/dcc-sync', async (req, res) => {
+        if (req.method !== 'POST') return fail(res, 405, 'POST only');
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk);
+          const raw = Buffer.concat(chunks).toString('utf8');
+          const body = raw ? JSON.parse(raw) : {};
+          const { dccSync } = (await import('./automation/dcc.mjs' as string)) as {
+            dccSync: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+          };
+          res.setHeader('content-type', 'application/json');
+          try {
+            const data = await dccSync(body);
+            res.end(JSON.stringify({ ok: true, data }));
+          } catch (liveErr) {
+            if (!body.dryRun) {
+              const staged = await dccSync({ ...body, dryRun: true });
+              res.end(JSON.stringify({ ok: true, fallbackDryRun: true, liveError: (liveErr as Error)?.message, data: staged }));
+              return;
+            }
+            throw liveErr;
+          }
+        } catch (e) {
+          fail(res, 400, (e as Error)?.message ?? 'dcc-sync failed');
+        }
+      });
     },
   };
 }

@@ -2,7 +2,20 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBVH } from 'three-mesh-bvh';
 import { describe, expect, it } from 'vitest';
-import { aoImage, finishAo, hemisphere, openness, withOcclusion, type AoMap } from '../src/core/ao';
+import {
+  aoImage,
+  bakeFastSdf,
+  buildFastContactBvh,
+  compareAoMethods,
+  contactHitDistance,
+  fastSdfTracedOpenness,
+  finishAo,
+  hemisphere,
+  openness,
+  sampleFastSdf,
+  withOcclusion,
+  type AoMap,
+} from '../src/core/ao';
 import { pickSwatches, wantsSwatches } from '../src/core/swatches';
 
 /** A floor with a tall wall along x = 0. */
@@ -113,5 +126,78 @@ describe('material swatches', () => {
     expect(wantsSwatches([0.71, 0.29])).toBe(false);       // one blank wall and a strip of ground
     expect(wantsSwatches([0.7, 0.1, 0.1])).toBe(false);    // one face fills the frame
     expect(wantsSwatches([0.4])).toBe(false);
+  });
+});
+
+describe('Fast-SDF-AO (Lipschitz isotropic R16F SDF + quantized SAH Contact BVH + Halton(2,3))', () => {
+  it('bakes an exact 1-Lipschitz-culled signed SDF for watertight geometry and unsigned SDF for open shells', () => {
+    const box = new THREE.BoxGeometry(2, 2, 2).toNonIndexed();
+    const vol = bakeFastSdf(box, { maxRes: 48, reach: 1.12, signed: true });
+    expect(vol.signed).toBe(true);
+    // Centre of [-1, 1]^3 box is 1.0 m inside -> negative distance ~ -1.0
+    expect(sampleFastSdf(vol, 0, 0, 0)).toBeLessThan(-0.85);
+    // Point 0.5 m outside +X face (x = 1.5, y = 0, z = 0) -> exact distance ~ +0.5
+    expect(sampleFastSdf(vol, 1.5, 0, 0)).toBeCloseTo(0.5, 1);
+    // Far-space blocks are culled via 1-Lipschitz bounds
+    expect(vol.stats.culledVoxels).toBeGreaterThan(0);
+  });
+
+  it('resolves 4 cm thin plates and avoids false occlusion from thin bars behind unclosed blockout walls', () => {
+    // Open single-sided wall at z = 0 facing +Z, with a thin 4 cm bar 15 cm BEHIND it (z = -0.15)
+    // and another 4 cm overhang bar IN FRONT of it at (x = 2, y = 1.2, z = +0.18)
+    const wall = new THREE.PlaneGeometry(8, 4).translate(0, 2, 0);
+    const backBar = new THREE.BoxGeometry(0.04, 4, 0.04).translate(-2, 2, -0.15);
+    const frontPlate = new THREE.BoxGeometry(1.5, 0.04, 0.4).translate(2, 1.2, 0.2);
+    const merged = mergeGeometries([wall, backBar, frontPlate].map((g) => g.toNonIndexed()))!;
+    const bvh = new MeshBVH(merged);
+
+    const vol = bakeFastSdf(merged, { maxRes: 128, reach: 1.12 });
+    const cbvh = buildFastContactBvh(merged, { gridSize: 1.0, range: 0.35, bias: 0.0003 });
+
+    // Contact ray straight into frontPlate from (2, 1.05, 0.2) along +Y hits at ~0.13 m
+    const hitDist = contactHitDistance(cbvh, 2, 1.05, 0.2, 0, 1, 0, 0, 1, 0, 0.35);
+    expect(hitDist).toBeCloseTo(0.13, 2);
+
+    // Point on front of open wall right in front of `backBar` (-2, 2, 0, normal +Z): ZERO occlusion (open = 1.0)!
+    const bent = new Float32Array(3);
+    const openInFrontOfBackBar = fastSdfTracedOpenness(vol, cbvh, -2, 2, 0, 0, 0, 1, {
+      rays: 32,
+      radius: 1.12,
+      falloff: 'linear',
+      outBent: bent,
+    });
+    expect(openInFrontOfBackBar).toBeGreaterThan(0.97);
+    expect(bent[2]).toBeGreaterThan(0.95);
+
+    // Point tucked directly under `frontPlate` on the wall (2, 1.05, 0, normal +Z): strongly occluded, bent normal tilts -Y!
+    const bentUnder = new Float32Array(3);
+    const openUnderOverhang = fastSdfTracedOpenness(vol, cbvh, 2, 1.05, 0, 0, 0, 1, {
+      rays: 32,
+      radius: 1.12,
+      falloff: 'linear',
+      outBent: bentUnder,
+    });
+    const gtUnder = openness(bvh, new THREE.Vector3(2, 1.05, 0), new THREE.Vector3(0, 0, 1), hemisphere(256), 1.12);
+    expect(openUnderOverhang).toBeLessThan(0.85);
+    expect(Math.abs(openUnderOverhang - gtUnder)).toBeLessThan(0.04);
+    expect(bentUnder[1]).toBeLessThan(-0.08);
+  });
+
+  it('matches 256-ray exact BVH ground truth closely across open, corner and overhang sample points', () => {
+    const bvh = world();
+    const pts: { position: THREE.Vector3; normal: THREE.Vector3 }[] = [];
+    const up = new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3(1, 0, 0);
+    for (const x of [0.05, 0.12, 0.25, 0.5, 0.9, 1.6, 3.0, 6.0]) {
+      for (const z of [-6, -2, 0, 2, 6]) {
+        pts.push({ position: new THREE.Vector3(x, 0, z), normal: up });
+      }
+    }
+    for (const y of [0.08, 0.25, 0.6, 1.2, 2.5]) {
+      pts.push({ position: new THREE.Vector3(0, y, 0), normal: right });
+    }
+    const cmp = compareAoMethods(bvh, pts, { radius: 2.5, rays: 24, gridRes: 128, falloff: 'linear' });
+    expect(cmp.fastSdfTraced.correlation).toBeGreaterThan(0.96);
+    expect(cmp.fastSdfTraced.mae).toBeLessThan(0.035);
   });
 });

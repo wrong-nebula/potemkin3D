@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { INDOOR, INDOOR_SOFT, OUTDOOR, OVERCAST, type Lighting } from './core/clay';
 import { aoImage, bakeAo, withOcclusion, type AoOptions } from './core/ao';
 import { Engine } from './core/engine';
-import { exportGlb } from './core/export';
+import { exportGlb, type ExportOptions } from './core/export';
 import { nameParts } from './core/naming';
 import { makePbr, pbrMetadata, unpackLinearPbrChannels, type PbrOptions } from './core/pbr';
 import { buildAlignedMaps, validateAlignedSource, type AlignedMapSource } from './core/aligned-maps';
@@ -450,7 +450,9 @@ export class Session {
   /** Unpack the current PBR set into packed glTF ORM and/or separate linear maps (roughness, metalness, occlusion, height, normal). */
   exportPbrChannels() {
     if (!this.engine?.pbr) throw new Error('make or load PBR maps first');
-    return unpackLinearPbrChannels(this.engine.pbr, this.engine.ao);
+    const { pbr, ao } = this.engine;
+    const guide = ao && ao.size !== pbr.size && ao.guide ? this.engine.atlas.texelGeometry(pbr.size) : undefined;
+    return unpackLinearPbrChannels(pbr, ao, guide);
   }
 
   /** Change material responses locally. Keep source maps, so repeated edits never accumulate filtering. */
@@ -1427,9 +1429,9 @@ export class Session {
     };
   }
 
-  async exportGlb(): Promise<ArrayBuffer> {
+  async exportGlb(opts: ExportOptions = {}): Promise<ArrayBuffer> {
     if (!this.engine) throw new Error('nothing to export');
-    return exportGlb(this.engine);
+    return exportGlb(this.engine, opts);
   }
 
   private async put(id: string, file: string, body: Blob | string) {
@@ -1506,8 +1508,9 @@ export class Session {
     if (pbr) {
       onProgress?.('normal and roughness maps');
       await this.put(id, 'normal.png', await toBlob(pbr.normal, pbr.size, pbr.size, 'image/png'));
-      // the saved ORM map carries the occlusion too, as the exported material's does
-      await this.put(id, 'orm.png', await toBlob(ao ? withOcclusion(pbr.orm, pbr.size, ao) : pbr.orm, pbr.size, pbr.size, 'image/png'));
+      // the saved ORM map carries the occlusion too (joint-bilateral upsampled when ao.size < pbr.size)
+      const ormGuide = ao && ao.size !== pbr.size && ao.guide ? this.engine.atlas.texelGeometry(pbr.size) : undefined;
+      await this.put(id, 'orm.png', await toBlob(ao ? withOcclusion(pbr.orm, pbr.size, ao, ormGuide) : pbr.orm, pbr.size, pbr.size, 'image/png'));
       for (const channel of ['height', 'normal', 'refinedNormal', 'roughness', 'metalness', 'edgeWear'] as const) {
         const pixels = pbr.source?.[channel];
         if (pixels) await this.put(id, `pbr_source_${channel}.png`, await toBlob(pixels, pbr.size, pbr.size, 'image/png'));

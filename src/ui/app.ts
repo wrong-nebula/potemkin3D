@@ -30,9 +30,11 @@ import type { UiSliderElement } from '@ui-sdk/web/slider';
 import type { UiTabsElement } from '@ui-sdk/web/tabs';
 import type { UiTextareaElement } from '@ui-sdk/web/textarea';
 import type { UiToggleElement } from '@ui-sdk/web/toggle';
+import * as THREE from 'three';
 import { setAgentConfirmHandler } from '../agent';
 import type { makeApi } from '../api';
 import type { CritiqueReport } from '../core/critic';
+import type { Note } from '../core/notes';
 import { MATERIAL_PRESETS, isMaterialPreset, suggestMaterialPreset, type MaterialAssignments } from '../core/material-presets';
 import { pbrQuote } from '../core/pbr';
 import { DEFAULT_PIPELINE, quote, type PipelineEvent, type PipelineOptions } from '../core/pipeline';
@@ -740,6 +742,85 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   const roofInput = makeInput('Roof material', 'Roof material', SAMPLES[0].roofStyle ?? DEFAULT_PIPELINE.roofStyle);
   const floorInput = makeInput('Ground material', 'Ground material', SAMPLES[0].floorStyle ?? DEFAULT_PIPELINE.floorStyle);
 
+  const pinnedNotes: Note[] = [];
+  let pinMode = false;
+  let pinMarkersGroup: THREE.Group | null = null;
+  const noteTextInput = makeInput('Note instruction', 'Click mesh to pin: arched door, ivy, plaque…');
+  const pinNoteToggle = makeToggle('Pin note', false, (on) => {
+    pinMode = on;
+    session.canvas.style.cursor = on ? 'crosshair' : '';
+    if (on) statusBanner.show('Pin note active: click any 3D surface in the viewport to place note.', 'info');
+  });
+  const clearNotesBtn = makeButton('Clear notes', () => {
+    pinnedNotes.length = 0;
+    syncPinMarkers();
+  });
+  clearNotesBtn.setDisabled(true);
+  const pinnedNotesChips = el('div', { class: 'chips' });
+
+  function syncPinMarkers() {
+    clearNotesBtn.setDisabled(pinnedNotes.length === 0);
+    pinnedNotesChips.replaceChildren(
+      ...pinnedNotes.map((n, idx) =>
+        el(
+          'span',
+          { class: 'chip' },
+          `#${idx + 1} ${n.text} (${n.at.map((v) => v.toFixed(1)).join(', ')})`,
+        ),
+      ),
+    );
+    const viewer = session.viewer;
+    if (!viewer) return;
+    if (pinMarkersGroup) {
+      viewer.scene.remove(pinMarkersGroup);
+      pinMarkersGroup.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          (o as THREE.Mesh).geometry.dispose();
+          ((o as THREE.Mesh).material as THREE.Material).dispose();
+        }
+      });
+      pinMarkersGroup = null;
+    }
+    if (pinnedNotes.length) {
+      pinMarkersGroup = new THREE.Group();
+      for (const n of pinnedNotes) {
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.12, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }),
+        );
+        marker.position.set(n.at[0], n.at[1], n.at[2]);
+        pinMarkersGroup.add(marker);
+      }
+      viewer.scene.add(pinMarkersGroup);
+    }
+    viewer.dirty = true;
+  }
+
+  let pointerDownPos: [number, number] | null = null;
+  session.canvas.addEventListener('pointerdown', (e) => {
+    pointerDownPos = [e.clientX, e.clientY];
+  });
+  session.canvas.addEventListener('pointerup', (e) => {
+    if (!pinMode || !pointerDownPos || !session.level || !session.viewer) return;
+    if (Math.hypot(e.clientX - pointerDownPos[0], e.clientY - pointerDownPos[1]) > 5) return;
+    const rect = session.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, session.viewer.camera);
+    const hit = session.level.bvh.raycastFirst(raycaster.ray, THREE.DoubleSide);
+    if (!hit) return;
+    const text = noteTextInput.value.trim() || 'surface detail';
+    const at: [number, number, number] = [+hit.point.x.toFixed(2), +hit.point.y.toFixed(2), +hit.point.z.toFixed(2)];
+    pinnedNotes.push({ text, at });
+    syncPinMarkers();
+    say(`pinned note "${text}" at (${at.join(', ')})`);
+    statusBanner.show(`Pinned "${text}" at (${at.join(', ')}).`, 'ok');
+  });
+
   const skySeg = makeSegmented(
     'Sky preset',
     [
@@ -945,6 +1026,24 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
   floorDetailWrap.hidden = true;
 
   const albedoExportBtn = makeButton('Save albedo PNG', () => exportAlbedoPng(), { className: 'full-btn' });
+  const exportFormatSel = makeSelect(
+    'GLB texture format',
+    [
+      { value: 'png', label: 'PNG (lossless)' },
+      { value: 'ktx2', label: 'KTX2 · UASTC (4× VRAM)' },
+    ],
+    'png',
+  );
+  const dccTargetSel = makeSelect(
+    'DCC target',
+    [
+      { value: 'blender', label: 'Blender (blender-mcp)' },
+      { value: 'unreal', label: 'Unreal (unreal-mcp)' },
+      { value: 'both', label: 'Blender + Unreal' },
+    ],
+    'blender',
+  );
+  const dccSyncBtn = makeButton('Sync to DCC', () => runDccSync(), { className: 'full-btn' });
   const channelFmtSel = makeSelect(
     'Channel packing',
     [
@@ -977,6 +1076,10 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       styleArea.wrap,
       roofInput.wrap,
       floorInput.wrap,
+      el('div', { class: 'divider' }),
+      noteTextInput.wrap,
+      el('div', { class: 'row' }, pinNoteToggle.root, clearNotesBtn.root),
+      pinnedNotesChips,
       el('div', { class: 'divider' }),
       skySeg.wrap,
       azSlider.wrap,
@@ -1036,8 +1139,12 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
       reliefSlider.wrap,
       floorDetailWrap,
       el('div', { class: 'divider' }),
+      exportFormatSel.wrap,
       albedoExportBtn.root,
       pbrExportWrap,
+      el('div', { class: 'divider' }),
+      dccTargetSel.wrap,
+      dccSyncBtn.root,
       matFeedback.el,
     ),
   );
@@ -1620,6 +1727,12 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
     savedAs = undefined;
     completedViewsCount = 0;
     eventFeed.length = 0;
+    pinnedNotes.length = 0;
+    pinMarkersGroup = null;
+    pinNoteToggle.setPressed(false);
+    pinMode = false;
+    session.canvas.style.cursor = '';
+    syncPinMarkers();
     stageSees.classList.remove('filled');
     stagePaints.classList.remove('filled');
     for (const b of [vViews, vCov, vCost, vTime]) b.textContent = '–';
@@ -1771,6 +1884,7 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
           check: samChk.checked && provCfg.provider !== 'local',
           checkPlanes: mogeChk.checked && provCfg.provider !== 'local',
           styleReference: swatchChk.checked,
+          ...(pinnedNotes.length ? { notes: [...pinnedNotes] } : {}),
           plan: planOpts(),
           provider: provCfg.provider,
           providerFallback: provCfg.providerFallback,
@@ -1804,13 +1918,50 @@ export function mountUi(session: Session, mounts: StudioMounts, api?: StudioApi)
     if (!session.engine) return;
     glbBtn.setDisabled(true);
     try {
-      const glb = await session.exportGlb();
-      download(new Blob([glb], { type: 'model/gltf-binary' }), `${session.level!.name}_textured.glb`);
-      statusBanner.show(`Exported ${session.level!.name}_textured.glb (${(glb.byteLength / (1024 * 1024)).toFixed(2)} MiB).`, 'ok');
+      const fmt = exportFormatSel.value as 'png' | 'ktx2';
+      const glb = await session.exportGlb({ format: fmt });
+      const suffix = fmt === 'ktx2' ? '_ktx2.glb' : '_textured.glb';
+      download(new Blob([glb], { type: 'model/gltf-binary' }), `${session.level!.name}${suffix}`);
+      statusBanner.show(`Exported ${session.level!.name}${suffix} (${(glb.byteLength / (1024 * 1024)).toFixed(2)} MiB, ${fmt.toUpperCase()}).`, 'ok');
+      say(`exported \`${session.level!.name}${suffix}\` (${(glb.byteLength / (1024 * 1024)).toFixed(2)} MiB)`);
     } catch (e) {
       statusBanner.show(String((e as Error)?.message ?? e), 'error');
     } finally {
       glbBtn.setDisabled(false);
+    }
+  }
+
+  async function runDccSync() {
+    if (!session.level) return;
+    dccSyncBtn.setDisabled(true);
+    try {
+      const target = dccTargetSel.value as 'blender' | 'unreal' | 'both';
+      const samplePath = sampleSel.value.startsWith('/') ? sampleSel.value.slice(1) : sampleSel.value;
+      const body = savedAs
+        ? { target, runId: savedAs }
+        : { target, glb: samplePath.endsWith('.glb') ? samplePath : 'samples/village.glb' };
+      const res = await fetch('/api/dcc-sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        fallbackDryRun?: boolean;
+        data?: { targets?: { server: string; status: string; tool: string }[]; receiptPath?: string };
+        error?: string;
+      };
+      if (!res.ok || !json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      const targetsSummary = (json.data?.targets ?? []).map((t) => `${t.server} (${t.tool})`).join(', ');
+      const msg = json.fallbackDryRun
+        ? `Staged DCC sync scripts for ${targetsSummary} (server offline; start blender-mcp/unreal-mcp for live push).`
+        : `Synced PBR bundle to ${targetsSummary}.`;
+      matFeedback.show(msg, 'ok');
+      say(`dcc-sync: ${msg}`);
+    } catch (e) {
+      matFeedback.show(String((e as Error)?.message ?? e), 'error');
+    } finally {
+      dccSyncBtn.setDisabled(false);
     }
   }
 

@@ -11,6 +11,8 @@
 - **Comlink:** Apache-2.0, copyright 2019 Google LLC; bundled in the authoring tool to talk to the xatlas worker, [source](https://github.com/GoogleChromeLabs/comlink).
 - **MCP TypeScript SDK:** Apache-2.0, Model Context Protocol contributors; installed through npm, [source](https://github.com/modelcontextprotocol/typescript-sdk).
 - **Zod:** MIT, Colin McDonnell and contributors; installed through npm, [source](https://github.com/colinhacks/zod).
+- **Fast-SDF-AO:** adapted in `src/core/fast-sdf-ao.ts` from [wrong-nebula/Fast-SDF-AO](https://github.com/wrong-nebula/Fast-SDF-AO) (MIT, wrong-nebula) for hybrid Contact-BVH + 1-Lipschitz `R16F` SDF ambient occlusion baking.
+- **JointBilateralUpsample (Three.js PR #35602):** adapted in `src/core/jbu.ts` and `src/core/atlas.ts` from [mrdoob/three.js#35602](https://github.com/mrdoob/three.js/pull/35602) (`JointBilateralUpsample.js`, MIT, Ben Houston / Three.js authors; after Sloan et al. 2007 and Kopf et al. 2007).
 - **Other dependencies:** installed through npm under their own licenses. `package-lock.json` records the dependency versions. Model services and downloadable weights retain their providers' terms; their availability is not granted by this repository's license.
 
 See [ASSET_LICENSES.md](ASSET_LICENSES.md) for the distinction between source code and scene media.
